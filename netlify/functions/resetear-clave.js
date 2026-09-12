@@ -1,15 +1,15 @@
 // netlify/functions/resetear-clave.js
 //
 // Cambia la contraseña de un usuario existente. Se ejecuta en el SERVIDOR
-// porque necesita la SUPABASE_SERVICE_ROLE_KEY (ya configurada para
-// crear-profesor.js, se reutiliza aquí).
+// porque necesita la SUPABASE_SERVICE_ROLE_KEY (misma variable que ya
+// configuraste para crear-profesor.js).
 
-const { createClient } = require('@supabase/supabase-js');
+import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-exports.handler = async (event) => {
+export const handler = async (event) => {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: 'Método no permitido' };
   }
@@ -23,7 +23,6 @@ exports.handler = async (event) => {
 
     const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
 
-    // Verifica que quien llama está autenticado y es admin.
     const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token);
     if (userError || !userData?.user) {
       return { statusCode: 401, body: JSON.stringify({ error: 'Token inválido' }) };
