@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { UserPlus } from "lucide-react";
+import { UserPlus, Pencil } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { supabaseSecondary } from "../lib/supabaseSecondary";
 
@@ -13,6 +13,13 @@ export default function Usuarios() {
   const [phone, setPhone] = useState("");
   const [creando, setCreando] = useState(false);
   const [mensaje, setMensaje] = useState(null); // { tipo: 'ok' | 'error', texto }
+
+  // --- Edición de un usuario existente (nuevo) ---
+  const [editando, setEditando] = useState(null); // usuario que se está editando, o null
+  const [editFullName, setEditFullName] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [guardandoEdicion, setGuardandoEdicion] = useState(false);
+  const [mensajeEdicion, setMensajeEdicion] = useState(null);
 
   async function cargar() {
     setCargando(true);
@@ -70,6 +77,39 @@ export default function Usuarios() {
     cargar();
   };
 
+  // ---------- NUEVO: editar nombre / teléfono ----------
+
+  const abrirEdicion = (u) => {
+    setMensajeEdicion(null);
+    setEditando(u);
+    setEditFullName(u.full_name || "");
+    setEditPhone(u.phone || "");
+  };
+
+  const cerrarEdicion = () => setEditando(null);
+
+  const guardarEdicion = async (e) => {
+    e.preventDefault();
+    if (!editando) return;
+    setGuardandoEdicion(true);
+    setMensajeEdicion(null);
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({ full_name: editFullName, phone: editPhone || null })
+      .eq("id", editando.id);
+
+    setGuardandoEdicion(false);
+
+    if (error) {
+      setMensajeEdicion({ tipo: "error", texto: error.message });
+      return;
+    }
+
+    setEditando(null);
+    cargar();
+  };
+
   return (
     <div className="p-4 md:p-8 grid lg:grid-cols-5 gap-6">
       <form onSubmit={crearUsuario} className="lg:col-span-2 bg-white border border-slate-200 rounded p-5 space-y-4 h-fit">
@@ -120,12 +160,46 @@ export default function Usuarios() {
                 <button onClick={() => cambiarActivo(u.id, u.active)} className="text-xs text-slate-500 hover:underline">
                   {u.active ? "Desactivar" : "Activar"}
                 </button>
+                <button onClick={() => abrirEdicion(u)} className="text-xs text-slate-500 hover:underline inline-flex items-center gap-1">
+                  <Pencil className="h-3 w-3" /> Editar
+                </button>
               </div>
             </div>
           ))}
           {!cargando && usuarios.length === 0 && <p className="p-6 text-sm text-slate-400 text-center">Sin usuarios todavía.</p>}
         </div>
       </div>
+
+      {editando && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+          <form onSubmit={guardarEdicion} className="bg-white rounded p-5 space-y-4 w-full max-w-sm">
+            <h3 className="font-ledger text-base font-semibold text-slate-900">Editar usuario</h3>
+            <p className="text-xs text-slate-400">{editando.role === "admin" ? "Administrador" : "Profesor"} · no se puede cambiar el correo desde aquí.</p>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1.5">Nombre completo</label>
+              <input required value={editFullName} onChange={(e) => setEditFullName(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1.5">Teléfono</label>
+              <input value={editPhone} onChange={(e) => setEditPhone(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+
+            {mensajeEdicion && (
+              <p className={`text-sm ${mensajeEdicion.tipo === "ok" ? "text-emerald-700" : "text-red-700"}`}>{mensajeEdicion.texto}</p>
+            )}
+
+            <div className="flex justify-end gap-3 pt-1">
+              <button type="button" onClick={cerrarEdicion} className="text-sm text-slate-500 px-3 py-2">
+                Cancelar
+              </button>
+              <button type="submit" disabled={guardandoEdicion} className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">
+                {guardandoEdicion ? "Guardando…" : "Guardar cambios"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
