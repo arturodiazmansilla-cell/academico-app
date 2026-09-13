@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Pencil, Check, X } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 
 export default function CursosParalelos() {
@@ -7,6 +7,10 @@ export default function CursosParalelos() {
   const [loading, setLoading] = useState(true);
   const [nuevoCurso, setNuevoCurso] = useState("");
   const [nuevoParalelo, setNuevoParalelo] = useState({});
+  const [editandoId, setEditandoId] = useState(null);
+  const [nombreEditado, setNombreEditado] = useState("");
+  const [guardandoEdicion, setGuardandoEdicion] = useState(false);
+  const [errorEdicion, setErrorEdicion] = useState("");
 
   async function cargar() {
     setLoading(true);
@@ -51,6 +55,38 @@ export default function CursosParalelos() {
     cargar();
   };
 
+  const iniciarEdicion = (curso) => {
+    setEditandoId(curso.id);
+    setNombreEditado(curso.name);
+    setErrorEdicion("");
+  };
+
+  const cancelarEdicion = () => {
+    setEditandoId(null);
+    setNombreEditado("");
+    setErrorEdicion("");
+  };
+
+  const guardarEdicion = async (id) => {
+    const nombre = nombreEditado.trim();
+    if (!nombre) {
+      setErrorEdicion("El nombre no puede quedar vacío.");
+      return;
+    }
+    setGuardandoEdicion(true);
+    const { error } = await supabase.from("courses").update({ name: nombre }).eq("id", id);
+    setGuardandoEdicion(false);
+    if (error) {
+      setErrorEdicion(
+        error.code === "23505" ? "Ya existe un curso con ese nombre." : "No se pudo guardar: " + error.message
+      );
+      return;
+    }
+    setEditandoId(null);
+    setNombreEditado("");
+    cargar();
+  };
+
   return (
     <div className="p-4 md:p-8 max-w-3xl space-y-6">
       <div className="bg-white border border-slate-200 rounded p-5 space-y-4">
@@ -74,12 +110,50 @@ export default function CursosParalelos() {
         <div className="space-y-4">
           {courses.map((c) => (
             <div key={c.id} className="bg-white border border-slate-200 rounded p-5">
-              <div className="flex items-center justify-between mb-3">
-                <p className="font-ledger text-sm font-semibold text-slate-900">{c.name}</p>
-                <button onClick={() => eliminarCurso(c.id)} className="text-slate-400 hover:text-red-600">
+              <div className="flex items-center justify-between mb-3 gap-3">
+                {editandoId === c.id ? (
+                  <div className="flex-1 flex items-center gap-2">
+                    <input
+                      autoFocus
+                      value={nombreEditado}
+                      onChange={(e) => setNombreEditado(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") guardarEdicion(c.id);
+                        if (e.key === "Escape") cancelarEdicion();
+                      }}
+                      className="flex-1 rounded border border-slate-300 px-2 py-1.5 text-sm font-ledger font-semibold"
+                    />
+                    <button
+                      onClick={() => guardarEdicion(c.id)}
+                      disabled={guardandoEdicion}
+                      className="text-emerald-700 hover:text-emerald-800 disabled:opacity-40"
+                      title="Guardar"
+                    >
+                      <Check className="h-4 w-4" />
+                    </button>
+                    <button onClick={cancelarEdicion} className="text-slate-400 hover:text-red-600" title="Cancelar">
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex-1 flex items-center gap-2 group">
+                    <p className="font-ledger text-sm font-semibold text-slate-900">{c.name}</p>
+                    <button
+                      onClick={() => iniciarEdicion(c)}
+                      className="text-slate-300 hover:text-slate-700"
+                      title="Editar nombre"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
+                <button onClick={() => eliminarCurso(c.id)} className="text-slate-400 hover:text-red-600 shrink-0">
                   <Trash2 className="h-4 w-4" />
                 </button>
               </div>
+              {editandoId === c.id && errorEdicion && (
+                <p className="text-xs text-red-600 mb-3">{errorEdicion}</p>
+              )}
               <div className="flex flex-wrap gap-2 mb-3">
                 {(c.parallels || []).map((p) => (
                   <span key={p.id} className="inline-flex items-center gap-2 text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
