@@ -281,14 +281,19 @@ function ImportarExcelModal({ courses, parallels, alumnosExistentes, onClose, on
   const validas = rows.filter((r) => r.valido);
   const conError = rows.filter((r) => !r.valido);
 
+  const FECHA_ISO = /^\d{4}-\d{2}-\d{2}$/;
+
   const confirmar = async () => {
+    setError("");
     setImportando(true);
     const registros = validas.map((r) => ({
       student_code: r.codigo,
       carnet: r.carnet || null,
       first_name: r.nombre,
       last_name: r.apellido,
-      birth_date: r.fecha || null,
+      // Postgres rechaza el insert completo si birth_date no es una fecha
+      // válida (por ejemplo, texto que parseFechaEs no logró convertir).
+      birth_date: FECHA_ISO.test(r.fecha || "") ? r.fecha : null,
       gender: r.genero || null,
       birthplace: r.lugarNacimiento || null,
       course_id: r.courseId,
@@ -299,10 +304,18 @@ function ImportarExcelModal({ courses, parallels, alumnosExistentes, onClose, on
       mother_phone: r.telMadre || null,
       active: true,
     }));
-    const { error: err } = await supabase.from("students").insert(registros);
-    setImportando(false);
-    if (err) setError(err.message);
-    else onImported();
+    try {
+      const { error: err } = await supabase.from("students").insert(registros);
+      if (err) {
+        setError(`No se pudo importar: ${err.message}`);
+        return;
+      }
+      onImported();
+    } catch (err) {
+      setError(`No se pudo importar: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setImportando(false);
+    }
   };
 
   return (
@@ -317,16 +330,15 @@ function ImportarExcelModal({ courses, parallels, alumnosExistentes, onClose, on
       }
     >
       {rows.length === 0 && (
-        <>
-          <div onClick={() => inputRef.current?.click()} className="border-2 border-dashed border-slate-300 rounded p-8 text-center cursor-pointer hover:border-emerald-500 hover:bg-emerald-50/30 transition-colors">
-            <Upload className="h-6 w-6 text-slate-400 mx-auto mb-2" />
-            <p className="text-sm text-slate-600">{fileName || "Haz clic para seleccionar el archivo .xlsx que envía la unidad educativa"}</p>
-            <p className="text-xs text-slate-400 mt-1">Se reconoce el formato oficial (bloques por curso/paralelo) o el formato simple de columnas.</p>
-            <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} className="hidden" />
-          </div>
-          {error && <p className="text-sm text-red-700 flex items-center gap-2"><AlertTriangle className="h-4 w-4 shrink-0" /> {error}</p>}
-        </>
+        <div onClick={() => inputRef.current?.click()} className="border-2 border-dashed border-slate-300 rounded p-8 text-center cursor-pointer hover:border-emerald-500 hover:bg-emerald-50/30 transition-colors">
+          <Upload className="h-6 w-6 text-slate-400 mx-auto mb-2" />
+          <p className="text-sm text-slate-600">{fileName || "Haz clic para seleccionar el archivo .xlsx que envía la unidad educativa"}</p>
+          <p className="text-xs text-slate-400 mt-1">Se reconoce el formato oficial (bloques por curso/paralelo) o el formato simple de columnas.</p>
+          <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} className="hidden" />
+        </div>
       )}
+
+      {error && <p className="text-sm text-red-700 flex items-center gap-2"><AlertTriangle className="h-4 w-4 shrink-0" /> {error}</p>}
 
       {rows.length > 0 && (
         <>
