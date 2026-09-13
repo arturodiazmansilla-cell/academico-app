@@ -94,6 +94,14 @@ create table if not exists settings (
   id smallint primary key default 1 check (id = 1),
   institution_name text not null default 'Mi Unidad Educativa',
   logo_data_url text,
+  theme_bg_color text,
+  theme_sidebar_color text,
+  theme_font_color text,
+  theme_font_size int,
+  teacher_can_import_students boolean not null default false,
+  teacher_can_manage_subjects boolean not null default false,
+  teacher_can_assign_subjects boolean not null default false,
+  teacher_can_manage_courses boolean not null default false,
   updated_at timestamptz not null default now()
 );
 
@@ -134,10 +142,30 @@ alter table courses enable row level security;
 alter table parallels enable row level security;
 
 create policy "courses_select" on courses for select using (auth.uid() is not null);
-create policy "courses_write" on courses for all using (is_admin()) with check (is_admin());
+create policy "courses_write" on courses for all
+  using (
+    auth.uid() is not null and (
+      is_admin() or (select coalesce(teacher_can_manage_courses, false) from settings where id = 1)
+    )
+  )
+  with check (
+    auth.uid() is not null and (
+      is_admin() or (select coalesce(teacher_can_manage_courses, false) from settings where id = 1)
+    )
+  );
 
 create policy "parallels_select" on parallels for select using (auth.uid() is not null);
-create policy "parallels_write" on parallels for all using (is_admin()) with check (is_admin());
+create policy "parallels_write" on parallels for all
+  using (
+    auth.uid() is not null and (
+      is_admin() or (select coalesce(teacher_can_manage_courses, false) from settings where id = 1)
+    )
+  )
+  with check (
+    auth.uid() is not null and (
+      is_admin() or (select coalesce(teacher_can_manage_courses, false) from settings where id = 1)
+    )
+  );
 
 -- ============================================================================
 -- 4. ESTUDIANTES
@@ -167,7 +195,17 @@ create index if not exists idx_students_course_parallel on students(course_id, p
 alter table students enable row level security;
 
 create policy "students_select" on students for select using (auth.uid() is not null);
-create policy "students_write" on students for all using (is_admin()) with check (is_admin());
+create policy "students_write" on students for all
+  using (
+    auth.uid() is not null and (
+      is_admin() or (select coalesce(teacher_can_import_students, false) from settings where id = 1)
+    )
+  )
+  with check (
+    auth.uid() is not null and (
+      is_admin() or (select coalesce(teacher_can_import_students, false) from settings where id = 1)
+    )
+  );
 
 -- ============================================================================
 -- 5. MATERIAS Y ASIGNACIÓN A PROFESORES

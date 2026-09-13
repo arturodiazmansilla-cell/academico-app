@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { ProtectedRoute } from "./routes/ProtectedRoute";
+import { useSettings } from "./context/SettingsContext";
 import Layout from "./components/Layout";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
@@ -12,6 +13,15 @@ import Riesgo from "./pages/Riesgo";
 import CursosParalelos from "./pages/CursosParalelos";
 import Usuarios from "./pages/Usuarios";
 import Configuracion from "./pages/Configuracion";
+
+function CursosRoute() {
+  const { permissions } = useSettings();
+  return (
+    <ProtectedRoute adminOnly allowExtra={permissions.canManageCourses}>
+      <CursosParalelos />
+    </ProtectedRoute>
+  );
+}
 
 export default function App() {
   return (
@@ -32,14 +42,7 @@ export default function App() {
         <Route path="/notas" element={<Notas />} />
         <Route path="/citaciones" element={<Citaciones />} />
         <Route path="/riesgo" element={<Riesgo />} />
-        <Route
-          path="/cursos"
-          element={
-            <ProtectedRoute adminOnly>
-              <CursosParalelos />
-            </ProtectedRoute>
-          }
-        />
+        <Route path="/cursos" element={<CursosRoute />} />
         <Route
           path="/usuarios"
           element={

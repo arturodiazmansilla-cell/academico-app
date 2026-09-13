@@ -1,7 +1,7 @@
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
-export function ProtectedRoute({ children, adminOnly = false }) {
+export function ProtectedRoute({ children, adminOnly = false, allowExtra = false }) {
   const { session, isAdmin, loading } = useAuth();
 
   if (loading) {
@@ -13,7 +13,10 @@ export function ProtectedRoute({ children, adminOnly = false }) {
   }
 
   if (!session) return <Navigate to="/login" replace />;
-  if (adminOnly && !isAdmin) return <Navigate to="/dashboard" replace />;
+  // allowExtra permite que una ruta "adminOnly" también sea accesible para
+  // un profesor cuando el administrador le activó el permiso correspondiente
+  // en Configuración (por ejemplo: gestionar Cursos).
+  if (adminOnly && !isAdmin && !allowExtra) return <Navigate to="/dashboard" replace />;
 
   return children;
 }

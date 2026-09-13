@@ -14,7 +14,7 @@ const NAV = [
   { to: "/notas", label: "Notas", icon: NotebookPen },
   { to: "/citaciones", label: "Citaciones", icon: Mail },
   { to: "/riesgo", label: "Riesgo", icon: ShieldAlert },
-  { to: "/cursos", label: "Cursos", icon: BookOpen, adminOnly: true },
+  { to: "/cursos", label: "Cursos", icon: BookOpen, adminOnly: true, permissionKey: "canManageCourses" },
   { to: "/usuarios", label: "Usuarios", icon: UserCog, adminOnly: true },
   { to: "/configuracion", label: "Configuración", icon: Settings, adminOnly: true },
 ];
@@ -40,9 +40,10 @@ function Logo({ dark }) {
 
 export default function Layout() {
   const { profile, isAdmin, signOut } = useAuth();
+  const { permissions } = useSettings();
   const navigate = useNavigate();
   const location = useLocation();
-  const items = NAV.filter((n) => !n.adminOnly || isAdmin);
+  const items = NAV.filter((n) => !n.adminOnly || isAdmin || (n.permissionKey && permissions[n.permissionKey]));
 
   const handleLogout = async () => {
     await signOut();
@@ -50,9 +51,12 @@ export default function Layout() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex">
+    <div className="min-h-screen flex" style={{ backgroundColor: "var(--app-bg-color)" }}>
       {/* Sidebar de escritorio */}
-      <aside className="hidden md:flex md:w-60 md:flex-col md:shrink-0 bg-slate-900 border-r border-slate-800">
+      <aside
+        className="hidden md:flex md:w-60 md:flex-col md:shrink-0 border-r border-slate-800"
+        style={{ backgroundColor: "var(--app-sidebar-color)" }}
+      >
         <div className="px-5 py-5 border-b border-slate-800">
           <Logo dark />
         </div>
@@ -66,8 +70,8 @@ export default function Layout() {
                 className={({ isActive }) =>
                   `w-full flex items-center gap-3 rounded px-3 py-2.5 text-sm transition-colors ${
                     isActive
-                      ? "bg-slate-800 text-white border-l-2 border-emerald-500"
-                      : "text-slate-300 hover:bg-slate-800/60 hover:text-white border-l-2 border-transparent"
+                      ? "bg-white/10 text-white border-l-2 border-emerald-500"
+                      : "text-slate-300 hover:bg-white/5 hover:text-white border-l-2 border-transparent"
                   }`
                 }
               >
@@ -78,7 +82,7 @@ export default function Layout() {
           })}
         </nav>
         <div className="px-3 py-4 border-t border-slate-800">
-          <button onClick={handleLogout} className="w-full flex items-center gap-3 rounded px-3 py-2.5 text-sm text-slate-400 hover:bg-slate-800/60 hover:text-white">
+          <button onClick={handleLogout} className="w-full flex items-center gap-3 rounded px-3 py-2.5 text-sm text-slate-400 hover:bg-white/5 hover:text-white">
             <LogOut className="h-4 w-4" />
             Cerrar sesión
           </button>
@@ -113,7 +117,10 @@ export default function Layout() {
       </div>
 
       {/* Menú inferior en móvil */}
-      <nav className="md:hidden fixed bottom-0 inset-x-0 z-20 bg-slate-900 border-t border-slate-800 flex overflow-x-auto py-1.5 px-1">
+      <nav
+        className="md:hidden fixed bottom-0 inset-x-0 z-20 border-t border-slate-800 flex overflow-x-auto py-1.5 px-1"
+        style={{ backgroundColor: "var(--app-sidebar-color)" }}
+      >
         {items.map((item) => {
           const Icon = item.icon;
           return (

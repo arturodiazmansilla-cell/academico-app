@@ -1,12 +1,12 @@
-import { useRef, useState } from "react";
-import { GraduationCap, ImagePlus, Trash2, Check, UserCircle2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { GraduationCap, ImagePlus, Trash2, Check, UserCircle2, ShieldCheck, Palette } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { useAuth } from "../context/AuthContext";
 import { useSettings } from "../context/SettingsContext";
 
 export default function Configuracion() {
   const { isAdmin, profile, refreshProfile } = useAuth();
-  const { institutionName, logoUrl, updateSettings } = useSettings();
+  const { institutionName, logoUrl, updateSettings, theme, updateTheme } = useSettings();
 
   const [tempName, setTempName] = useState(institutionName);
   const [tempLogo, setTempLogo] = useState(logoUrl);
@@ -16,6 +16,70 @@ export default function Configuracion() {
   const [fullName, setFullName] = useState(profile?.full_name || "");
   const [phone, setPhone] = useState(profile?.phone || "");
   const [savedPerfil, setSavedPerfil] = useState(false);
+
+  // --- Permisos de profesores ---
+  const [permisos, setPermisos] = useState({
+    teacher_can_import_students: false,
+    teacher_can_manage_subjects: false,
+    teacher_can_assign_subjects: false,
+    teacher_can_manage_courses: false,
+  });
+  const [cargandoPermisos, setCargandoPermisos] = useState(true);
+  const [guardandoPermisos, setGuardandoPermisos] = useState(false);
+  const [savedPermisos, setSavedPermisos] = useState(false);
+
+  // --- Apariencia (nuevo) ---
+  const [tempTheme, setTempTheme] = useState(theme);
+  const [guardandoTema, setGuardandoTema] = useState(false);
+  const [savedTema, setSavedTema] = useState(false);
+
+  useEffect(() => {
+    setTempTheme(theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    (async () => {
+      const { data } = await supabase
+        .from("settings")
+        .select("teacher_can_import_students, teacher_can_manage_subjects, teacher_can_assign_subjects, teacher_can_manage_courses")
+        .eq("id", 1)
+        .maybeSingle();
+      if (data) setPermisos(data);
+      setCargandoPermisos(false);
+    })();
+  }, [isAdmin]);
+
+  const cambiarPermiso = async (campo) => {
+    const nuevoValor = !permisos[campo];
+    setPermisos((prev) => ({ ...prev, [campo]: nuevoValor }));
+    setGuardandoPermisos(true);
+    const { error } = await supabase.from("settings").update({ [campo]: nuevoValor }).eq("id", 1);
+    setGuardandoPermisos(false);
+    if (error) {
+      setPermisos((prev) => ({ ...prev, [campo]: !nuevoValor }));
+      alert("No se pudo guardar el permiso: " + error.message);
+      return;
+    }
+    setSavedPermisos(true);
+    setTimeout(() => setSavedPermisos(false), 2000);
+  };
+
+  const guardarTema = async () => {
+    setGuardandoTema(true);
+    const { error } = await updateTheme(tempTheme);
+    setGuardandoTema(false);
+    if (error) {
+      alert("No se pudo guardar la apariencia: " + error.message);
+      return;
+    }
+    setSavedTema(true);
+    setTimeout(() => setSavedTema(false), 2000);
+  };
+
+  const restaurarTema = () => {
+    setTempTheme({ bgColor: "#f8fafc", sidebarColor: "#0f172a", fontColor: "#1e293b", fontSize: 16 });
+  };
 
   const handleLogoFile = (e) => {
     const file = e.target.files?.[0];
@@ -81,6 +145,116 @@ export default function Configuracion() {
         </div>
       )}
 
+      {isAdmin && (
+        <div className="bg-white border border-slate-200 rounded p-5 space-y-5">
+          <div>
+            <h3 className="font-ledger text-base font-semibold text-slate-900 flex items-center gap-2">
+              <Palette className="h-4 w-4 text-slate-400" /> Apariencia
+            </h3>
+            <p className="text-sm text-slate-500 mt-1">
+              Cambia el fondo, el color del menú lateral y el tamaño/color de letra de toda la app. Algunos títulos específicos pueden mantener su color actual.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <ColorField
+              label="Fondo de la pantalla"
+              value={tempTheme.bgColor}
+              onChange={(v) => setTempTheme((prev) => ({ ...prev, bgColor: v }))}
+            />
+            <ColorField
+              label="Color del menú"
+              value={tempTheme.sidebarColor}
+              onChange={(v) => setTempTheme((prev) => ({ ...prev, sidebarColor: v }))}
+            />
+            <ColorField
+              label="Color de letra"
+              value={tempTheme.fontColor}
+              onChange={(v) => setTempTheme((prev) => ({ ...prev, fontColor: v }))}
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1.5">
+              Tamaño de letra: {tempTheme.fontSize}px
+            </label>
+            <input
+              type="range"
+              min={13}
+              max={20}
+              value={tempTheme.fontSize}
+              onChange={(e) => setTempTheme((prev) => ({ ...prev, fontSize: Number(e.target.value) }))}
+              className="w-full"
+            />
+            <div className="flex justify-between text-[11px] text-slate-400 mt-1">
+              <span>Pequeño</span>
+              <span>Normal</span>
+              <span>Grande</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button onClick={guardarTema} disabled={guardandoTema} className="rounded bg-slate-900 text-white px-4 py-2 text-sm font-medium hover:bg-slate-800 disabled:opacity-50">
+              {guardandoTema ? "Guardando…" : "Guardar apariencia"}
+            </button>
+            <button onClick={restaurarTema} type="button" className="text-sm text-slate-500 hover:underline">
+              Restaurar por defecto
+            </button>
+            {savedTema && <span className="text-xs text-emerald-700 flex items-center gap-1"><Check className="h-3.5 w-3.5" /> Guardado</span>}
+          </div>
+        </div>
+      )}
+
+      {isAdmin && (
+        <div className="bg-white border border-slate-200 rounded p-5 space-y-5">
+          <div>
+            <h3 className="font-ledger text-base font-semibold text-slate-900 flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-slate-400" /> Permisos de profesores
+            </h3>
+            <p className="text-sm text-slate-500 mt-1">
+              Controla qué pueden hacer los profesores además de su trabajo diario (asistencia, notas, kardex). La configuración misma siempre queda reservada solo para administradores.
+            </p>
+          </div>
+
+          {cargandoPermisos ? (
+            <p className="text-sm text-slate-400">Cargando…</p>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              <PermisoToggle
+                titulo="Importar alumnos desde Excel"
+                descripcion="El profesor puede subir la lista de alumnos de su curso."
+                activo={permisos.teacher_can_import_students}
+                onToggle={() => cambiarPermiso("teacher_can_import_students")}
+                deshabilitado={guardandoPermisos}
+              />
+              <PermisoToggle
+                titulo="Gestionar cursos y paralelos"
+                descripcion="El profesor puede crear, editar y eliminar cursos y paralelos."
+                activo={permisos.teacher_can_manage_courses}
+                onToggle={() => cambiarPermiso("teacher_can_manage_courses")}
+                deshabilitado={guardandoPermisos}
+              />
+              <PermisoToggle
+                titulo="Gestionar materias"
+                descripcion="El profesor puede crear y editar materias del colegio."
+                activo={permisos.teacher_can_manage_subjects}
+                onToggle={() => cambiarPermiso("teacher_can_manage_subjects")}
+                deshabilitado={guardandoPermisos}
+              />
+              <PermisoToggle
+                titulo="Asignar materia y profesor"
+                descripcion="El profesor puede asignar qué materia dicta, en qué curso y paralelo (incluyendo a otros profesores)."
+                activo={permisos.teacher_can_assign_subjects}
+                onToggle={() => cambiarPermiso("teacher_can_assign_subjects")}
+                deshabilitado={guardandoPermisos}
+              />
+            </div>
+          )}
+
+          {savedPermisos && <span className="text-xs text-emerald-700 flex items-center gap-1"><Check className="h-3.5 w-3.5" /> Guardado</span>}
+        </div>
+      )}
+
       <div className="bg-white border border-slate-200 rounded p-5 space-y-5">
         <div>
           <h3 className="font-ledger text-base font-semibold text-slate-900">Mi perfil</h3>
@@ -102,6 +276,50 @@ export default function Configuracion() {
           {savedPerfil && <span className="text-xs text-emerald-700 flex items-center gap-1"><Check className="h-3.5 w-3.5" /> Guardado</span>}
         </div>
       </div>
+    </div>
+  );
+}
+
+function ColorField({ label, value, onChange }) {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-slate-600 mb-1.5">{label}</label>
+      <div className="flex items-center gap-2">
+        <input
+          type="color"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="h-9 w-9 rounded border border-slate-300 cursor-pointer shrink-0"
+        />
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full rounded border border-slate-300 px-2 py-2 text-xs font-mono"
+        />
+      </div>
+    </div>
+  );
+}
+
+function PermisoToggle({ titulo, descripcion, activo, onToggle, deshabilitado }) {
+  return (
+    <div className="py-4 first:pt-0 last:pb-0 flex items-center justify-between gap-4">
+      <div>
+        <p className="text-sm text-slate-800">{titulo}</p>
+        <p className="text-xs text-slate-500 mt-0.5">{descripcion}</p>
+      </div>
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={deshabilitado}
+        aria-pressed={activo}
+        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
+          activo ? "bg-slate-900" : "bg-slate-200"
+        }`}
+      >
+        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${activo ? "translate-x-6" : "translate-x-1"}`} />
+      </button>
     </div>
   );
 }
