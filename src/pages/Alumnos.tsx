@@ -2,11 +2,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Search, Plus, FileSpreadsheet, Upload, AlertTriangle, Check, ChevronRight } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { useAuth } from "../context/AuthContext";
+import { useSettings } from "../context/SettingsContext";
 import { Field, SelectField, Modal } from "../components/ui";
 import { leerArchivoAlumnos } from "../lib/importAlumnos";
 
 export default function Alumnos() {
   const { isAdmin } = useAuth();
+  const { permissions } = useSettings();
+  // El admin siempre puede. El profesor solo si el admin activó el permiso
+  // "Importar alumnos desde Excel" en Configuración (cubre también el alta
+  // uno por uno, ya que es la misma acción de fondo: crear alumnos).
+  const puedeGestionarAlumnos = isAdmin || permissions.canImportStudents;
+
   const [alumnos, setAlumnos] = useState([]);
   const [courses, setCourses] = useState([]);
   const [parallels, setParallels] = useState([]);
@@ -60,7 +67,7 @@ export default function Alumnos() {
             {courses.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </div>
-        {isAdmin && (
+        {puedeGestionarAlumnos && (
           <div className="flex gap-2">
             <button onClick={() => setShowImport(true)} className="inline-flex items-center gap-2 rounded border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
               <FileSpreadsheet className="h-4 w-4" /> Importar Excel
