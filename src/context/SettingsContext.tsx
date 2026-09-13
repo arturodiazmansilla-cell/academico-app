@@ -10,10 +10,17 @@ const DEFAULT_THEME = {
   fontSize: 16,
 };
 
+const DEFAULT_PERMISSIONS = {
+  canImportStudents: false,
+  canManageSubjects: false,
+  canAssignSubjects: false,
+};
+
 export function SettingsProvider({ children }) {
   const [institutionName, setInstitutionName] = useState("Mi Unidad Educativa");
   const [logoUrl, setLogoUrl] = useState(null);
   const [theme, setTheme] = useState(DEFAULT_THEME);
+  const [permissions, setPermissions] = useState(DEFAULT_PERMISSIONS);
   const [loading, setLoading] = useState(true);
 
   async function load() {
@@ -30,6 +37,11 @@ export function SettingsProvider({ children }) {
         sidebarColor: data.theme_sidebar_color || DEFAULT_THEME.sidebarColor,
         fontColor: data.theme_font_color || DEFAULT_THEME.fontColor,
         fontSize: data.theme_font_size || DEFAULT_THEME.fontSize,
+      });
+      setPermissions({
+        canImportStudents: !!data.teacher_can_import_students,
+        canManageSubjects: !!data.teacher_can_manage_subjects,
+        canAssignSubjects: !!data.teacher_can_assign_subjects,
       });
     }
     setLoading(false);
@@ -86,7 +98,16 @@ export function SettingsProvider({ children }) {
 
   return (
     <SettingsContext.Provider
-      value={{ institutionName, logoUrl, theme, loading, refresh: load, updateSettings, updateTheme }}
+      value={{
+        institutionName,
+        logoUrl,
+        theme,
+        permissions,
+        loading,
+        refresh: load,
+        updateSettings,
+        updateTheme,
+      }}
     >
       {children}
     </SettingsContext.Provider>
