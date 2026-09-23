@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { GraduationCap, ImagePlus, Trash2, Check, UserCircle2, ShieldCheck, Palette } from "lucide-react";
+import { GraduationCap, ImagePlus, Trash2, Check, UserCircle2, ShieldCheck, Palette, GaugeCircle, Plus } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { useAuth } from "../context/AuthContext";
 import { useSettings } from "../context/SettingsContext";
@@ -22,16 +22,21 @@ export default function Configuracion() {
     teacher_can_import_students: false,
     teacher_can_manage_subjects: false,
     teacher_can_assign_subjects: false,
-    teacher_can_manage_courses: false,
+    teacher_can_import_grades: false,
   });
   const [cargandoPermisos, setCargandoPermisos] = useState(true);
   const [guardandoPermisos, setGuardandoPermisos] = useState(false);
   const [savedPermisos, setSavedPermisos] = useState(false);
 
-  // --- Apariencia (nuevo) ---
+  // --- Apariencia ---
   const [tempTheme, setTempTheme] = useState(theme);
   const [guardandoTema, setGuardandoTema] = useState(false);
   const [savedTema, setSavedTema] = useState(false);
+
+  // --- Rangos de calificación cualitativa (nuevo) ---
+  const [rangos, setRangos] = useState([]);
+  const [cargandoRangos, setCargandoRangos] = useState(true);
+  const [nuevoRango, setNuevoRango] = useState({ min_score: "", max_score: "", label: "", description: "" });
 
   useEffect(() => {
     setTempTheme(theme);
@@ -42,13 +47,44 @@ export default function Configuracion() {
     (async () => {
       const { data } = await supabase
         .from("settings")
-        .select("teacher_can_import_students, teacher_can_manage_subjects, teacher_can_assign_subjects, teacher_can_manage_courses")
+        .select("teacher_can_import_students, teacher_can_import_grades, teacher_can_manage_subjects, teacher_can_assign_subjects")
         .eq("id", 1)
         .maybeSingle();
       if (data) setPermisos(data);
       setCargandoPermisos(false);
     })();
+    cargarRangos();
   }, [isAdmin]);
+
+  async function cargarRangos() {
+    setCargandoRangos(true);
+    const { data } = await supabase.from("qualitative_ranges").select("*").order("sort_order").order("min_score");
+    setRangos(data || []);
+    setCargandoRangos(false);
+  }
+
+  const agregarRango = async () => {
+    if (!nuevoRango.label.trim() || nuevoRango.min_score === "" || nuevoRango.max_score === "") return;
+    const { error } = await supabase.from("qualitative_ranges").insert({
+      min_score: Number(nuevoRango.min_score),
+      max_score: Number(nuevoRango.max_score),
+      label: nuevoRango.label.trim(),
+      description: nuevoRango.description.trim() || null,
+      sort_order: rangos.length,
+    });
+    if (error) {
+      alert("No se pudo agregar: " + error.message);
+      return;
+    }
+    setNuevoRango({ min_score: "", max_score: "", label: "", description: "" });
+    cargarRangos();
+  };
+
+  const eliminarRango = async (id) => {
+    if (!confirm("¿Eliminar este rango?")) return;
+    await supabase.from("qualitative_ranges").delete().eq("id", id);
+    cargarRangos();
+  };
 
   const cambiarPermiso = async (campo) => {
     const nuevoValor = !permisos[campo];
@@ -209,6 +245,74 @@ export default function Configuracion() {
         <div className="bg-white border border-slate-200 rounded p-5 space-y-5">
           <div>
             <h3 className="font-ledger text-base font-semibold text-slate-900 flex items-center gap-2">
+              <GaugeCircle className="h-4 w-4 text-slate-400" /> Rangos de calificación cualitativa
+            </h3>
+            <p className="text-sm text-slate-500 mt-1">
+              Define los rangos de la calificación trimestral final (ej. 90-100 = DP "Desarrollo Pleno"). Se usan en las notas y en los reportes.
+            </p>
+          </div>
+
+          {cargandoRangos ? (
+            <p className="text-sm text-slate-400">Cargando…</p>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {rangos.map((r) => (
+                <div key={r.id} className="py-3 flex items-center justify-between gap-3">
+                  <div className="text-sm">
+                    <span className="font-mono text-slate-700">{r.min_score}–{r.max_score}</span>
+                    <span className="mx-2 text-slate-300">→</span>
+                    <span className="font-medium text-slate-900">{r.label}</span>
+                    {r.description && <span className="text-slate-500"> · {r.description}</span>}
+                  </div>
+                  <button onClick={() => eliminarRango(r.id)} className="text-red-600 text-xs hover:underline shrink-0">
+                    Eliminar
+                  </button>
+                </div>
+              ))}
+              {rangos.length === 0 && <p className="py-3 text-sm text-slate-400">Sin rangos definidos todavía.</p>}
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-100">
+            <input
+              type="number"
+              placeholder="Desde"
+              value={nuevoRango.min_score}
+              onChange={(e) => setNuevoRango((p) => ({ ...p, min_score: e.target.value }))}
+              className="rounded border border-slate-300 px-2 py-2 text-sm"
+            />
+            <input
+              type="number"
+              placeholder="Hasta"
+              value={nuevoRango.max_score}
+              onChange={(e) => setNuevoRango((p) => ({ ...p, max_score: e.target.value }))}
+              className="rounded border border-slate-300 px-2 py-2 text-sm"
+            />
+            <input
+              type="text"
+              placeholder="Sigla (ej. DP)"
+              value={nuevoRango.label}
+              onChange={(e) => setNuevoRango((p) => ({ ...p, label: e.target.value }))}
+              className="rounded border border-slate-300 px-2 py-2 text-sm"
+            />
+            <input
+              type="text"
+              placeholder="Descripción (opcional)"
+              value={nuevoRango.description}
+              onChange={(e) => setNuevoRango((p) => ({ ...p, description: e.target.value }))}
+              className="rounded border border-slate-300 px-2 py-2 text-sm"
+            />
+          </div>
+          <button onClick={agregarRango} className="inline-flex items-center gap-2 text-sm text-emerald-700 hover:underline">
+            <Plus className="h-3.5 w-3.5" /> Agregar rango
+          </button>
+        </div>
+      )}
+
+      {isAdmin && (
+        <div className="bg-white border border-slate-200 rounded p-5 space-y-5">
+          <div>
+            <h3 className="font-ledger text-base font-semibold text-slate-900 flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-slate-400" /> Permisos de profesores
             </h3>
             <p className="text-sm text-slate-500 mt-1">
@@ -228,10 +332,10 @@ export default function Configuracion() {
                 deshabilitado={guardandoPermisos}
               />
               <PermisoToggle
-                titulo="Gestionar cursos y paralelos"
-                descripcion="El profesor puede crear, editar y eliminar cursos y paralelos."
-                activo={permisos.teacher_can_manage_courses}
-                onToggle={() => cambiarPermiso("teacher_can_manage_courses")}
+                titulo="Importar notas desde Excel"
+                descripcion="El profesor puede subir las notas de su curso desde el Registro de Calificaciones (.xlsx)."
+                activo={permisos.teacher_can_import_grades}
+                onToggle={() => cambiarPermiso("teacher_can_import_grades")}
                 deshabilitado={guardandoPermisos}
               />
               <PermisoToggle

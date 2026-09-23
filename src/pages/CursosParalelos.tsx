@@ -1,16 +1,32 @@
-import { useEffect, useState } from "react";
-import { Plus, Trash2, Pencil, Check, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Plus, Trash2, Pencil, Check, X, Search } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
+
+const NIVELES = ["Inicial", "Primario", "Secundario"];
+
+const NIVEL_ESTILO = {
+  Inicial: "bg-amber-50 text-amber-700 border-amber-200",
+  Primario: "bg-blue-50 text-blue-700 border-blue-200",
+  Secundario: "bg-violet-50 text-violet-700 border-violet-200",
+};
 
 export default function CursosParalelos() {
   const [courses, setCourses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [nuevoCurso, setNuevoCurso] = useState("");
+  const [nuevoNivel, setNuevoNivel] = useState("");
+  const [errorNuevo, setErrorNuevo] = useState("");
   const [nuevoParalelo, setNuevoParalelo] = useState({});
   const [editandoId, setEditandoId] = useState(null);
   const [nombreEditado, setNombreEditado] = useState("");
   const [guardandoEdicion, setGuardandoEdicion] = useState(false);
   const [errorEdicion, setErrorEdicion] = useState("");
+  const [guardandoNivelId, setGuardandoNivelId] = useState(null);
+  const [errorNivelId, setErrorNivelId] = useState(null);
+
+  // --- Filtros de la lista (nuevo) ---
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroNivel, setFiltroNivel] = useState("");
 
   async function cargar() {
     setLoading(true);
@@ -26,12 +42,38 @@ export default function CursosParalelos() {
     cargar();
   }, []);
 
+  const cursosFiltrados = useMemo(() => {
+    const texto = busqueda.trim().toLowerCase();
+    return courses.filter((c) => {
+      const coincideNombre = !texto || c.name.toLowerCase().includes(texto);
+      const coincideNivel = !filtroNivel || c.level === filtroNivel;
+      return coincideNombre && coincideNivel;
+    });
+  }, [courses, busqueda, filtroNivel]);
+
   const crearCurso = async () => {
-    if (!nuevoCurso.trim()) return;
-    const { error } = await supabase.from("courses").insert({ name: nuevoCurso.trim() });
+    setErrorNuevo("");
+    const nombre = nuevoCurso.trim();
+    if (!nombre) return;
+    if (!nuevoNivel) {
+      setErrorNuevo("Selecciona el nivel del curso.");
+      return;
+    }
+    // Verifica duplicados antes de guardar (sin distinguir mayúsculas/espacios).
+    const yaExiste = courses.some((c) => c.name.trim().toLowerCase() === nombre.toLowerCase());
+    if (yaExiste) {
+      setErrorNuevo("Ya existe un curso con ese nombre.");
+      return;
+    }
+    const { error } = await supabase.from("courses").insert({ name: nombre, level: nuevoNivel });
     if (!error) {
       setNuevoCurso("");
+      setNuevoNivel("");
       cargar();
+    } else {
+      setErrorNuevo(
+        error.code === "23505" ? "Ya existe un curso con ese nombre." : "No se pudo crear: " + error.message
+      );
     }
   };
 
@@ -53,6 +95,18 @@ export default function CursosParalelos() {
   const eliminarCurso = async (id) => {
     await supabase.from("courses").delete().eq("id", id);
     cargar();
+  };
+
+  const cambiarNivel = async (id, level) => {
+    setGuardandoNivelId(id);
+    setErrorNivelId(null);
+    setCourses((prev) => prev.map((c) => (c.id === id ? { ...c, level } : c)));
+    const { error } = await supabase.from("courses").update({ level }).eq("id", id);
+    setGuardandoNivelId(null);
+    if (error) {
+      setErrorNivelId(id);
+      cargar();
+    }
   };
 
   const iniciarEdicion = (curso) => {
@@ -91,24 +145,58 @@ export default function CursosParalelos() {
     <div className="p-4 md:p-8 max-w-3xl space-y-6">
       <div className="bg-white border border-slate-200 rounded p-5 space-y-4">
         <h3 className="font-ledger text-base font-semibold text-slate-900">Nuevo curso</h3>
-        <div className="flex gap-2">
-          <input
-            value={nuevoCurso}
-            onChange={(e) => setNuevoCurso(e.target.value)}
-            placeholder="Ej. 1RO SECUNDARIA"
-            className="flex-1 rounded border border-slate-300 px-3 py-2 text-sm"
-          />
-          <button onClick={crearCurso} className="inline-flex items-center gap-2 rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800">
+        <div className="flex flex-col sm:flex-row sm:items-end gap-2">
+          <div className="flex-1">
+            <input
+              value={nuevoCurso}
+              onChange={(e) => setNuevoCurso(e.target.value)}
+              placeholder="Ej. 1RO SECUNDARIA"
+              className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
+            />
+          </div>
+          <div className="sm:w-44">
+            <label className="block text-xs font-medium text-slate-600 mb-1.5">Nivel</label>
+            <select
+              value={nuevoNivel}
+              onChange={(e) => setNuevoNivel(e.target.value)}
+              className="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-700"
+            >
+              <option value="">Nivel…</option>
+              {NIVELES.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </div>
+          <button onClick={crearCurso} className="inline-flex items-center justify-center gap-2 rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800">
             <Plus className="h-4 w-4" /> Crear
           </button>
         </div>
+        {errorNuevo && <p className="text-xs text-red-600">{errorNuevo}</p>}
+      </div>
+
+      <div className="flex flex-col sm:flex-row gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+          <input
+            value={busqueda}
+            onChange={(e) => setBusqueda(e.target.value)}
+            placeholder="Buscar curso por nombre"
+            className="w-full rounded border border-slate-300 pl-9 pr-3 py-2 text-sm"
+          />
+        </div>
+        <select
+          value={filtroNivel}
+          onChange={(e) => setFiltroNivel(e.target.value)}
+          className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 sm:w-48"
+        >
+          <option value="">Todos los niveles</option>
+          {NIVELES.map((n) => <option key={n} value={n}>{n}</option>)}
+        </select>
       </div>
 
       {loading ? (
         <p className="text-sm text-slate-400">Cargando…</p>
       ) : (
         <div className="space-y-4">
-          {courses.map((c) => (
+          {cursosFiltrados.map((c) => (
             <div key={c.id} className="bg-white border border-slate-200 rounded p-5">
               <div className="flex items-center justify-between mb-3 gap-3">
                 {editandoId === c.id ? (
@@ -136,7 +224,7 @@ export default function CursosParalelos() {
                     </button>
                   </div>
                 ) : (
-                  <div className="flex-1 flex items-center gap-2 group">
+                  <div className="flex-1 flex items-center gap-2 group flex-wrap">
                     <p className="font-ledger text-sm font-semibold text-slate-900">{c.name}</p>
                     <button
                       onClick={() => iniciarEdicion(c)}
@@ -154,6 +242,24 @@ export default function CursosParalelos() {
               {editandoId === c.id && errorEdicion && (
                 <p className="text-xs text-red-600 mb-3">{errorEdicion}</p>
               )}
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-xs text-slate-500">Nivel:</span>
+                <select
+                  value={c.level || ""}
+                  onChange={(e) => cambiarNivel(c.id, e.target.value)}
+                  disabled={guardandoNivelId === c.id}
+                  className={`rounded border px-2 py-1 text-xs disabled:opacity-50 ${
+                    c.level
+                      ? NIVEL_ESTILO[c.level] || "border-slate-300 text-slate-700"
+                      : "border-amber-300 bg-amber-50 text-amber-700"
+                  }`}
+                >
+                  <option value="">Sin nivel</option>
+                  {NIVELES.map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+                {guardandoNivelId === c.id && <span className="text-xs text-slate-400">Guardando…</span>}
+                {errorNivelId === c.id && <span className="text-xs text-red-600">No se pudo guardar el nivel.</span>}
+              </div>
               <div className="flex flex-wrap gap-2 mb-3">
                 {(c.parallels || []).map((p) => (
                   <span key={p.id} className="inline-flex items-center gap-2 text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
@@ -176,6 +282,9 @@ export default function CursosParalelos() {
               </div>
             </div>
           ))}
+          {cursosFiltrados.length === 0 && courses.length > 0 && (
+            <p className="text-sm text-slate-400">Ningún curso coincide con el filtro.</p>
+          )}
           {courses.length === 0 && <p className="text-sm text-slate-400">Todavía no hay cursos creados.</p>}
         </div>
       )}

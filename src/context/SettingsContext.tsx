@@ -15,6 +15,7 @@ const DEFAULT_PERMISSIONS = {
   canManageSubjects: false,
   canAssignSubjects: false,
   canManageCourses: false,
+  canImportGrades: false,
 };
 
 export function SettingsProvider({ children }) {
@@ -44,6 +45,7 @@ export function SettingsProvider({ children }) {
         canManageSubjects: !!data.teacher_can_manage_subjects,
         canAssignSubjects: !!data.teacher_can_assign_subjects,
         canManageCourses: !!data.teacher_can_manage_courses,
+        canImportGrades: !!data.teacher_can_import_grades,
       });
     }
     setLoading(false);

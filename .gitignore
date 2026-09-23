@@ -4,3 +4,9 @@ dist
 .env.local
 .DS_Store
 *.log
+
+# Planillas Excel con datos personales de alumnos: no se versionan
+*.xlsx
+
+# Notas locales con comandos y contraseñas
+DOneDriveEscritorioSistemasapp A.txt

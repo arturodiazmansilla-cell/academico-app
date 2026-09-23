@@ -11,11 +11,13 @@ export interface Institucion {
   updated_at: string;
 }
 
+// Coincide con la tabla real public.subjects
 export interface Materia {
   id: string;
-  nombre: string;
-  sigla: string | null;
-  activa: boolean;
+  name: string;
+  code: string | null;
+  description: string | null;
+  active: boolean;
   created_at: string;
 }
 

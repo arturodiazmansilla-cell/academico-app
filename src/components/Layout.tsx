@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   GraduationCap, LayoutDashboard, Users, ClipboardCheck, Mail,
-  FileWarning, NotebookPen, ShieldAlert, Settings, UserCog, BookOpen, LogOut,
+  FileWarning, NotebookPen, ShieldAlert, Settings, UserCog, BookOpen, Library, LogOut, ClipboardList,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useSettings } from "../context/SettingsContext";
@@ -14,7 +14,9 @@ const NAV = [
   { to: "/notas", label: "Notas", icon: NotebookPen },
   { to: "/citaciones", label: "Citaciones", icon: Mail },
   { to: "/riesgo", label: "Riesgo", icon: ShieldAlert },
+  { to: "/reportes", label: "Reportes", icon: ClipboardList },
   { to: "/cursos", label: "Cursos", icon: BookOpen, adminOnly: true, permissionKey: "canManageCourses" },
+  { to: "/materias", label: "Materias", icon: Library },
   { to: "/usuarios", label: "Usuarios", icon: UserCog, adminOnly: true },
   { to: "/configuracion", label: "Configuración", icon: Settings, adminOnly: true },
 ];
@@ -81,12 +83,6 @@ export default function Layout() {
             );
           })}
         </nav>
-        <div className="px-3 py-4 border-t border-slate-800">
-          <button onClick={handleLogout} className="w-full flex items-center gap-3 rounded px-3 py-2.5 text-sm text-slate-400 hover:bg-white/5 hover:text-white">
-            <LogOut className="h-4 w-4" />
-            Cerrar sesión
-          </button>
-        </div>
       </aside>
 
       <div className="flex-1 flex flex-col pb-14 md:pb-0 min-w-0">
@@ -108,6 +104,14 @@ export default function Layout() {
             <div className="h-8 w-8 rounded-full bg-slate-200 flex items-center justify-center text-xs font-medium text-slate-700 shrink-0">
               {(profile?.full_name || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("")}
             </div>
+            <button
+              onClick={handleLogout}
+              title="Cerrar sesión"
+              className="flex items-center gap-1.5 rounded border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-700 shrink-0"
+            >
+              <LogOut className="h-4 w-4" />
+              <span className="hidden sm:inline">Salir</span>
+            </button>
           </div>
         </div>
 

@@ -47,6 +47,19 @@ export function AuthProvider({ children }) {
 
   const signOut = () => supabase.auth.signOut();
 
+  // Envía el correo de recuperación. redirectTo debe apuntar a la página
+  // /reset-password de este sitio (debe estar habilitada en
+  // Supabase > Authentication > URL Configuration > Redirect URLs).
+  const resetPasswordForEmail = (email) =>
+    supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
+
+  // Se usa dentro de la página /reset-password, una vez que Supabase
+  // ya autenticó al usuario mediante el link del correo.
+  const updatePassword = (newPassword) =>
+    supabase.auth.updateUser({ password: newPassword });
+
   const refreshProfile = () => loadProfile(session?.user?.id);
 
   const value = {
@@ -58,6 +71,8 @@ export function AuthProvider({ children }) {
     loading,
     signIn,
     signOut,
+    resetPasswordForEmail,
+    updatePassword,
     refreshProfile,
   };
 
