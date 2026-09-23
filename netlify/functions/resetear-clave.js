@@ -1,8 +1,11 @@
 // netlify/functions/resetear-clave.js
 //
 // Cambia la contraseña de un usuario existente. Se ejecuta en el SERVIDOR
-// porque necesita la SUPABASE_SERVICE_ROLE_KEY (misma variable que ya
-// configuraste para crear-profesor.js).
+// porque necesita la SUPABASE_SERVICE_ROLE_KEY.
+//
+// CONFIGURACIÓN NECESARIA en Netlify (Site settings → Environment variables):
+//   SUPABASE_URL              = URL del proyecto (Settings → API → Project URL)
+//   SUPABASE_SERVICE_ROLE_KEY = (Settings → API → "service_role" key. ¡SECRETA, no la anon key!)
 
 import { createClient } from '@supabase/supabase-js';
 
