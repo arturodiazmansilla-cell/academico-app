@@ -546,7 +546,7 @@ function descargar(blob, nombre) {
 
 // Convierte el logo guardado en Configuración (data URL o URL de imagen, en cualquier formato)
 // a un PNG pequeño que jsPDF y Excel puedan insertar. Si falla, el reporte sale sin logo.
-async function prepararLogo(logoUrl) {
+export async function prepararLogo(logoUrl) {
   if (!logoUrl) return null;
   try {
     const img = await new Promise((res, rej) => {

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 import type { Materia } from '../../types/academico';
-import { Info } from 'lucide-react';
+import { Info, FileText } from 'lucide-react';
+import ReporteMateriasModal from '../../components/ReporteMateriasModal';
 
 export default function Materias() {
   const [materias, setMaterias] = useState<Materia[]>([]);
@@ -20,6 +21,7 @@ export default function Materias() {
   const [editSigla, setEditSigla] = useState('');
   const [editDescripcion, setEditDescripcion] = useState('');
   const [guardandoEdicion, setGuardandoEdicion] = useState(false);
+  const [mostrarReporte, setMostrarReporte] = useState(false);
 
   useEffect(() => {
     cargar();
@@ -231,7 +233,17 @@ export default function Materias() {
 
   return (
     <div className="max-w-2xl mx-auto p-6">
-      <h1 className="text-2xl font-semibold mb-6">Materias</h1>
+      <div className="flex items-center justify-between gap-3 mb-6">
+        <h1 className="text-2xl font-semibold">Materias</h1>
+        <button
+          type="button"
+          onClick={() => setMostrarReporte(true)}
+          disabled={cargando}
+          className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+        >
+          <FileText className="h-4 w-4" /> Reporte
+        </button>
+      </div>
 
       {error && <div className="mb-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
@@ -338,6 +350,8 @@ export default function Materias() {
           )}
         </ul>
       )}
+
+      {mostrarReporte && <ReporteMateriasModal materias={materias} onClose={() => setMostrarReporte(false)} />}
     </div>
   );
 }
