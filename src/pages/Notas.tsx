@@ -603,6 +603,7 @@ function ImportarPlanillaModal({ subjectId, courseId, parallelId, students, eval
   const [error, setError] = useState("");
   const [importando, setImportando] = useState(false);
   const [resumen, setResumen] = useState(null);
+  const [coincidenciasManuales, setCoincidenciasManuales] = useState({}); // { indiceFila: studentId }
   const inputRef = useRef(null);
 
   const handleFile = async (e) => {
@@ -638,15 +639,17 @@ function ImportarPlanillaModal({ subjectId, courseId, parallelId, students, eval
     setResultado(parsed);
   };
 
-  // Cruce de alumnos del archivo contra los alumnos ya registrados en este curso/paralelo
+  // Cruce de alumnos del archivo contra los alumnos ya registrados en este curso/paralelo.
+  // Si no hubo coincidencia automática por nombre, se usa la que el profesor eligió a mano.
   const alumnosCruzados = useMemo(() => {
     if (!resultado) return [];
-    return resultado.alumnos.map((a) => {
+    return resultado.alumnos.map((a, i) => {
       const objetivo = normalizarNombre(a.nombreCompleto);
-      const match = students.find((s) => normalizarNombre(`${s.last_name} ${s.first_name}`) === objetivo);
-      return { ...a, alumnoDB: match || null };
+      const automatico = students.find((s) => normalizarNombre(`${s.last_name} ${s.first_name}`) === objetivo);
+      const manual = !automatico && coincidenciasManuales[i] ? students.find((s) => s.id === coincidenciasManuales[i]) : null;
+      return { ...a, alumnoDB: automatico || manual || null, coincidenciaManual: !automatico && !!manual };
     });
-  }, [resultado, students]);
+  }, [resultado, students, coincidenciasManuales]);
 
   const totalCriterios = resultado
     ? resultado.criterios.ser.length + resultado.criterios.saber.length + resultado.criterios.hacer.length
@@ -842,7 +845,7 @@ function ImportarPlanillaModal({ subjectId, courseId, parallelId, students, eval
             <button onClick={() => { setResultado(null); setFileName(""); setHojas([]); }} className="ml-auto text-xs text-slate-500 hover:underline">Elegir otro archivo</button>
           </div>
 
-          <div className="border border-slate-200 rounded overflow-x-auto max-h-64 overflow-y-auto">
+          <div className="border border-slate-200 rounded overflow-x-auto max-h-80 overflow-y-auto">
             <table className="w-full text-xs">
               <thead className="bg-slate-50 text-slate-500 sticky top-0">
                 <tr>
@@ -856,9 +859,22 @@ function ImportarPlanillaModal({ subjectId, courseId, parallelId, students, eval
                     <td className="px-3 py-2 whitespace-nowrap">{a.nombreCompleto}</td>
                     <td className="px-3 py-2">
                       {a.alumnoDB ? (
-                        <span className="text-emerald-700 flex items-center gap-1 whitespace-nowrap"><Check className="h-3.5 w-3.5" /> {a.alumnoDB.first_name} {a.alumnoDB.last_name}</span>
+                        <span className={`flex items-center gap-1 whitespace-nowrap ${a.coincidenciaManual ? "text-amber-700" : "text-emerald-700"}`}>
+                          <Check className="h-3.5 w-3.5" /> {a.alumnoDB.first_name} {a.alumnoDB.last_name}
+                          {a.coincidenciaManual && <span className="text-[10px] text-amber-600">(elegido a mano)</span>}
+                        </span>
                       ) : (
-                        <span className="text-red-700">No encontrado en este curso/paralelo</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-red-700 whitespace-nowrap">No encontrado —</span>
+                          <select
+                            value=""
+                            onChange={(e) => setCoincidenciasManuales((prev) => ({ ...prev, [i]: e.target.value }))}
+                            className="rounded border border-slate-300 px-2 py-1 text-xs"
+                          >
+                            <option value="">Elegir alumno manualmente…</option>
+                            {students.map((s) => <option key={s.id} value={s.id}>{s.first_name} {s.last_name}</option>)}
+                          </select>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -866,6 +882,10 @@ function ImportarPlanillaModal({ subjectId, courseId, parallelId, students, eval
               </tbody>
             </table>
           </div>
+          <p className="text-[11px] text-slate-400">
+            Si un nombre no coincidió automáticamente, puedes elegir manualmente a qué alumno
+            corresponde en el desplegable de su fila — no hace falta corregir el Excel.
+          </p>
           {error && <p className="text-sm text-red-700 flex items-center gap-2"><AlertTriangle className="h-4 w-4 shrink-0" /> {error}</p>}
         </>
       )}
