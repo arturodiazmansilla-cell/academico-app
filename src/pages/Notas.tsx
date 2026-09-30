@@ -1,9 +1,18 @@
 import { useEffect, useMemo, useState, useRef } from "react";
-import { Plus, Check, FileSpreadsheet, Upload, AlertTriangle, Download } from "lucide-react";
+import { Plus, Check, FileSpreadsheet, Upload, AlertTriangle, Download, Pencil, FileUp } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { useAuth } from "../context/AuthContext";
 import { Field, Modal } from "../components/ui";
 import { leerArchivoNotas, generarPlantillaNotas } from "../lib/importNotas";
+import { leerLibroPlanilla, parsearPlanillaCompleta, normalizarNombre } from "../lib/importPlanilla";
+
+const DIMENSIONES = [
+  { key: "ser", label: "SER", max: 10 },
+  { key: "saber", label: "SABER", max: 45 },
+  { key: "hacer", label: "HACER", max: 40 },
+  { key: "autoevaluacion", label: "Autoevaluación", max: 5 },
+];
+const DIMENSION_MAX = { ser: 10, saber: 45, hacer: 40, autoevaluacion: 5 };
 
 export default function Notas() {
   const { user } = useAuth();
@@ -17,13 +26,16 @@ export default function Notas() {
   const [courseId, setCourseId] = useState("");
   const [parallelId, setParallelId] = useState("");
 
+  const [dimensionActiva, setDimensionActiva] = useState("ser");
   const [evaluaciones, setEvaluaciones] = useState([]);
   const [evaluacionId, setEvaluacionId] = useState("");
-  const [notas, setNotas] = useState({}); // { studentId: score }
-  const [notasTodas, setNotasTodas] = useState([]); // todas las notas de las evaluaciones filtradas (para promedios)
+  const [notas, setNotas] = useState({});
+  const [notasTodas, setNotasTodas] = useState([]);
 
-  const [showNueva, setShowNueva] = useState(false);
+  const [showEvalModal, setShowEvalModal] = useState(false);
+  const [evaluacionEditando, setEvaluacionEditando] = useState(null);
   const [showImportarNotas, setShowImportarNotas] = useState(false);
+  const [showImportarPlanilla, setShowImportarPlanilla] = useState(false);
   const [saved, setSaved] = useState(false);
   const [guardando, setGuardando] = useState(false);
 
@@ -63,11 +75,9 @@ export default function Notas() {
       .order("evaluation_date", { ascending: false });
     setEvaluaciones(data || []);
     if (data && data.length > 0) {
-      if (!data.find((e) => e.id === evaluacionId)) setEvaluacionId(data[0].id);
       const { data: todasNotas } = await supabase.from("grades").select("*").in("evaluation_id", data.map((e) => e.id));
       setNotasTodas(todasNotas || []);
     } else {
-      setEvaluacionId("");
       setNotasTodas([]);
     }
   }
@@ -76,6 +86,20 @@ export default function Notas() {
     cargarEvaluaciones();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subjectId, courseId, parallelId]);
+
+  const evaluacionesDimension = useMemo(
+    () => evaluaciones.filter((e) => (e.dimension || "hacer") === dimensionActiva),
+    [evaluaciones, dimensionActiva]
+  );
+
+  useEffect(() => {
+    if (evaluacionesDimension.length > 0) {
+      if (!evaluacionesDimension.find((e) => e.id === evaluacionId)) setEvaluacionId(evaluacionesDimension[0].id);
+    } else {
+      setEvaluacionId("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dimensionActiva, evaluaciones]);
 
   async function cargarNotasEvaluacion(id) {
     if (!id) { setNotas({}); return; }
@@ -93,18 +117,23 @@ export default function Notas() {
 
   const evaluacionActual = evaluaciones.find((e) => e.id === evaluacionId);
 
-  const promedioPonderado = (studentId) => {
-    let suma = 0, pesoTotal = 0;
-    evaluaciones.forEach((ev) => {
-      const nota = notasTodas.find((n) => n.student_id === studentId && n.evaluation_id === ev.id);
-      if (nota && nota.score !== null && nota.score !== undefined) {
-        suma += (Number(nota.score) / Number(ev.maximum_score || 1)) * Number(ev.weight || 0);
-        pesoTotal += Number(ev.weight || 0);
-      }
-    });
-    if (pesoTotal === 0) return null;
-    return (suma / pesoTotal) * 100;
-  };
+  function promedioDimension(studentId, dimensionKey) {
+    const evalsDeLaDimension = evaluaciones.filter((e) => (e.dimension || "hacer") === dimensionKey);
+    const notasDelAlumno = evalsDeLaDimension
+      .map((ev) => notasTodas.find((n) => n.student_id === studentId && n.evaluation_id === ev.id))
+      .filter((n) => n && n.score !== null && n.score !== undefined);
+    if (notasDelAlumno.length === 0) return null;
+    const suma = notasDelAlumno.reduce((acc, n) => acc + Number(n.score), 0);
+    return suma / notasDelAlumno.length;
+  }
+
+  function totalMaestro(studentId) {
+    return ["ser", "saber", "hacer"].reduce((acc, key) => acc + (promedioDimension(studentId, key) ?? 0), 0);
+  }
+
+  function calificacionTrimestral(studentId) {
+    return totalMaestro(studentId) + (promedioDimension(studentId, "autoevaluacion") ?? 0);
+  }
 
   const guardarNotas = async () => {
     if (!evaluacionId) return;
@@ -123,16 +152,31 @@ export default function Notas() {
     setSaved(true);
   };
 
-  const crearEvaluacion = async ({ titulo, evaluationTypeId, fecha, puntajeMax, ponderacion }) => {
-    const { data, error } = await supabase.from("evaluations").insert({
-      subject_id: subjectId, teacher_id: user.id, course_id: courseId, parallel_id: parallelId,
-      evaluation_type_id: evaluationTypeId || null, title: titulo, evaluation_date: fecha,
-      maximum_score: puntajeMax, weight: ponderacion,
-    }).select().single();
-    if (!error) {
-      setShowNueva(false);
-      await cargarEvaluaciones();
-      setEvaluacionId(data.id);
+  const guardarEvaluacion = async ({ id, titulo, evaluationTypeId, fecha, puntajeMax, dimension }) => {
+    if (id) {
+      const { error } = await supabase.from("evaluations").update({
+        title: titulo, evaluation_type_id: evaluationTypeId || null, evaluation_date: fecha,
+        maximum_score: puntajeMax, dimension,
+      }).eq("id", id);
+      if (!error) {
+        setShowEvalModal(false);
+        setEvaluacionEditando(null);
+        setDimensionActiva(dimension);
+        await cargarEvaluaciones();
+        setEvaluacionId(id);
+      }
+    } else {
+      const { data, error } = await supabase.from("evaluations").insert({
+        subject_id: subjectId, teacher_id: user.id, course_id: courseId, parallel_id: parallelId,
+        evaluation_type_id: evaluationTypeId || null, title: titulo, evaluation_date: fecha,
+        maximum_score: puntajeMax, dimension,
+      }).select().single();
+      if (!error) {
+        setShowEvalModal(false);
+        setDimensionActiva(dimension);
+        await cargarEvaluaciones();
+        setEvaluacionId(data.id);
+      }
     }
   };
 
@@ -163,88 +207,168 @@ export default function Notas() {
       </div>
 
       {subjectId && courseId && parallelId && (
-        <div className="grid lg:grid-cols-5 gap-6">
-          <div className="lg:col-span-2 space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs text-slate-500">Evaluaciones</p>
-              <div className="flex items-center gap-3">
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap gap-2">
+              {DIMENSIONES.map((d) => (
                 <button
-                  onClick={() => setShowImportarNotas(true)}
-                  disabled={!evaluacionActual}
-                  className="inline-flex items-center gap-1 text-xs text-slate-600 hover:underline disabled:text-slate-300 disabled:no-underline disabled:cursor-not-allowed"
+                  key={d.key}
+                  onClick={() => setDimensionActiva(d.key)}
+                  className={`px-4 py-2 rounded-full text-sm font-medium border transition-colors ${
+                    dimensionActiva === d.key
+                      ? "bg-slate-900 text-white border-slate-900"
+                      : "bg-white text-slate-600 border-slate-300 hover:border-slate-400"
+                  }`}
                 >
-                  <FileSpreadsheet className="h-3.5 w-3.5" /> Importar notas
-                </button>
-                <button onClick={() => setShowNueva(true)} className="inline-flex items-center gap-1 text-xs text-emerald-700 hover:underline">
-                  <Plus className="h-3.5 w-3.5" /> Nueva evaluación
-                </button>
-              </div>
-            </div>
-            <div className="bg-white border border-slate-200 rounded divide-y divide-slate-100">
-              {evaluaciones.map((e) => (
-                <button key={e.id} onClick={() => setEvaluacionId(e.id)}
-                  className={`w-full text-left p-3.5 hover:bg-slate-50 ${evaluacionId === e.id ? "bg-emerald-50/60 border-l-2 border-emerald-600" : "border-l-2 border-transparent"}`}>
-                  <p className="text-sm text-slate-800">{e.title}</p>
-                  <p className="text-xs text-slate-500 mt-0.5">{e.evaluation_date} · {e.weight}% · máx {e.maximum_score} pts</p>
+                  {d.label} <span className="opacity-60">/{d.max}</span>
                 </button>
               ))}
-              {evaluaciones.length === 0 && <p className="p-6 text-sm text-slate-400 text-center">Sin evaluaciones para este filtro todavía.</p>}
             </div>
-
-            <p className="text-xs text-slate-500 pt-2">Promedio ponderado</p>
-            <div className="bg-white border border-slate-200 rounded divide-y divide-slate-100">
-              {students.map((s) => {
-                const prom = promedioPonderado(s.id);
-                return (
-                  <div key={s.id} className="p-3 flex items-center justify-between text-sm">
-                    <span className="text-slate-700">{s.first_name} {s.last_name}</span>
-                    <span className={`font-medium ${prom !== null && prom < 51 ? "text-red-700" : "text-slate-800"}`}>{prom !== null ? prom.toFixed(1) : "—"}</span>
-                  </div>
-                );
-              })}
-            </div>
+            <button
+              onClick={() => setShowImportarPlanilla(true)}
+              className="inline-flex items-center gap-2 rounded border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            >
+              <FileUp className="h-3.5 w-3.5" /> Importar planilla completa (SER/SABER/HACER)
+            </button>
           </div>
 
-          <div className="lg:col-span-3 space-y-3">
-            {evaluacionActual ? (
-              <>
-                <div className="bg-white border border-slate-200 rounded p-4">
-                  <p className="font-ledger text-base font-semibold text-slate-900">{evaluacionActual.title}</p>
-                  <p className="text-xs text-slate-500 mt-1">{evaluacionActual.evaluation_date} · Ponderación {evaluacionActual.weight}% · Puntaje máximo {evaluacionActual.maximum_score}</p>
-                </div>
-                <div className="bg-white border border-slate-200 rounded divide-y divide-slate-100">
-                  {students.map((s) => (
-                    <div key={s.id} className="p-3.5 flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-sm text-slate-800">{s.first_name} {s.last_name}</p>
-                        <p className="text-xs text-slate-500">{s.student_code || "s/código"}</p>
-                      </div>
-                      <input
-                        type="number" min="0" max={evaluacionActual.maximum_score}
-                        value={notas[s.id] ?? ""}
-                        onChange={(e) => { setNotas((prev) => ({ ...prev, [s.id]: e.target.value })); setSaved(false); }}
-                        className="w-24 rounded border border-slate-300 px-2.5 py-1.5 text-sm text-right"
-                        placeholder="—"
-                      />
-                    </div>
-                  ))}
-                  {students.length === 0 && <p className="p-6 text-sm text-slate-400 text-center">No hay estudiantes activos en este curso y paralelo.</p>}
-                </div>
-                <div className="flex items-center justify-end gap-3">
-                  {saved && <span className="text-xs text-emerald-700 flex items-center gap-1"><Check className="h-3.5 w-3.5" /> Notas guardadas</span>}
-                  <button onClick={guardarNotas} disabled={guardando} className="inline-flex items-center gap-2 rounded bg-slate-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">
-                    {guardando ? "Guardando…" : "Guardar notas"}
+          <div className="grid lg:grid-cols-5 gap-6">
+            <div className="lg:col-span-2 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs text-slate-500">Evaluaciones de {DIMENSIONES.find((d) => d.key === dimensionActiva)?.label}</p>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setShowImportarNotas(true)}
+                    disabled={!evaluacionActual}
+                    className="inline-flex items-center gap-1 text-xs text-slate-600 hover:underline disabled:text-slate-300 disabled:no-underline disabled:cursor-not-allowed"
+                  >
+                    <FileSpreadsheet className="h-3.5 w-3.5" /> Importar notas
+                  </button>
+                  <button
+                    onClick={() => { setEvaluacionEditando(null); setShowEvalModal(true); }}
+                    className="inline-flex items-center gap-1 text-xs text-emerald-700 hover:underline"
+                  >
+                    <Plus className="h-3.5 w-3.5" /> Nueva evaluación
                   </button>
                 </div>
-              </>
-            ) : (
-              <div className="bg-white border border-slate-200 rounded p-8 text-center text-sm text-slate-400">Crea una evaluación para empezar a registrar notas.</div>
-            )}
+              </div>
+              <div className="bg-white border border-slate-200 rounded divide-y divide-slate-100">
+                {evaluacionesDimension.map((e) => (
+                  <div
+                    key={e.id}
+                    className={`flex items-center justify-between p-3.5 hover:bg-slate-50 ${evaluacionId === e.id ? "bg-emerald-50/60 border-l-2 border-emerald-600" : "border-l-2 border-transparent"}`}
+                  >
+                    <button onClick={() => setEvaluacionId(e.id)} className="flex-1 text-left">
+                      <p className="text-sm text-slate-800">{e.title}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">{e.evaluation_date} · máx {e.maximum_score} pts</p>
+                    </button>
+                    <button
+                      onClick={() => { setEvaluacionEditando(e); setShowEvalModal(true); }}
+                      className="text-slate-400 hover:text-slate-700 p-1"
+                      title="Editar evaluación"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+                {evaluacionesDimension.length === 0 && <p className="p-6 text-sm text-slate-400 text-center">Sin evaluaciones en esta dimensión todavía.</p>}
+              </div>
+            </div>
+
+            <div className="lg:col-span-3 space-y-3">
+              {evaluacionActual ? (
+                <>
+                  <div className="bg-white border border-slate-200 rounded p-4">
+                    <p className="font-ledger text-base font-semibold text-slate-900">{evaluacionActual.title}</p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      {DIMENSIONES.find((d) => d.key === (evaluacionActual.dimension || "hacer"))?.label} · {evaluacionActual.evaluation_date} · Puntaje máximo {evaluacionActual.maximum_score}
+                    </p>
+                  </div>
+                  <div className="bg-white border border-slate-200 rounded divide-y divide-slate-100">
+                    {students.map((s) => (
+                      <div key={s.id} className="p-3.5 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm text-slate-800">{s.first_name} {s.last_name}</p>
+                          <p className="text-xs text-slate-500">{s.student_code || "s/código"}</p>
+                        </div>
+                        <input
+                          type="number" min="0" max={evaluacionActual.maximum_score}
+                          value={notas[s.id] ?? ""}
+                          onChange={(e) => { setNotas((prev) => ({ ...prev, [s.id]: e.target.value })); setSaved(false); }}
+                          className="w-24 rounded border border-slate-300 px-2.5 py-1.5 text-sm text-right"
+                          placeholder="—"
+                        />
+                      </div>
+                    ))}
+                    {students.length === 0 && <p className="p-6 text-sm text-slate-400 text-center">No hay estudiantes activos en este curso y paralelo.</p>}
+                  </div>
+                  <div className="flex items-center justify-end gap-3">
+                    {saved && <span className="text-xs text-emerald-700 flex items-center gap-1"><Check className="h-3.5 w-3.5" /> Notas guardadas</span>}
+                    <button onClick={guardarNotas} disabled={guardando} className="inline-flex items-center gap-2 rounded bg-slate-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">
+                      {guardando ? "Guardando…" : "Guardar notas"}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="bg-white border border-slate-200 rounded p-8 text-center text-sm text-slate-400">
+                  Crea una evaluación en esta dimensión para empezar a registrar notas.
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+
+          <div className="space-y-2">
+            <p className="text-xs text-slate-500">Registro de calificaciones</p>
+            <div className="bg-white border border-slate-200 rounded overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
+                    <th className="px-4 py-3 font-medium">Estudiante</th>
+                    <th className="px-4 py-3 font-medium text-right">SER /10</th>
+                    <th className="px-4 py-3 font-medium text-right">SABER /45</th>
+                    <th className="px-4 py-3 font-medium text-right">HACER /40</th>
+                    <th className="px-4 py-3 font-medium text-right">TOTAL /95</th>
+                    <th className="px-4 py-3 font-medium text-right">Autoeval. /5</th>
+                    <th className="px-4 py-3 font-medium text-right">Calif. trimestral /100</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {students.map((s) => {
+                    const ser = promedioDimension(s.id, "ser");
+                    const saber = promedioDimension(s.id, "saber");
+                    const hacer = promedioDimension(s.id, "hacer");
+                    const autoeval = promedioDimension(s.id, "autoevaluacion");
+                    return (
+                      <tr key={s.id}>
+                        <td className="px-4 py-3 text-slate-800 whitespace-nowrap">{s.first_name} {s.last_name}</td>
+                        <td className="px-4 py-3 text-right text-slate-600">{ser !== null ? ser.toFixed(1) : "—"}</td>
+                        <td className="px-4 py-3 text-right text-slate-600">{saber !== null ? saber.toFixed(1) : "—"}</td>
+                        <td className="px-4 py-3 text-right text-slate-600">{hacer !== null ? hacer.toFixed(1) : "—"}</td>
+                        <td className="px-4 py-3 text-right text-slate-700 font-medium">{totalMaestro(s.id).toFixed(1)}</td>
+                        <td className="px-4 py-3 text-right text-slate-600">{autoeval !== null ? autoeval.toFixed(1) : "—"}</td>
+                        <td className="px-4 py-3 text-right font-semibold text-slate-900">{calificacionTrimestral(s.id).toFixed(1)}</td>
+                      </tr>
+                    );
+                  })}
+                  {students.length === 0 && (
+                    <tr><td colSpan={7} className="p-6 text-sm text-slate-400 text-center">Sin estudiantes.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
       )}
 
-      {showNueva && <NuevaEvaluacionModal tipos={tipos} onClose={() => setShowNueva(false)} onSave={crearEvaluacion} />}
+      {showEvalModal && (
+        <EvaluacionModal
+          tipos={tipos}
+          evaluacion={evaluacionEditando}
+          dimensionPorDefecto={dimensionActiva}
+          onClose={() => { setShowEvalModal(false); setEvaluacionEditando(null); }}
+          onSave={guardarEvaluacion}
+        />
+      )}
       {showImportarNotas && evaluacionActual && (
         <ImportarNotasModal
           evaluacion={evaluacionActual}
@@ -258,7 +382,67 @@ export default function Notas() {
           }}
         />
       )}
+      {showImportarPlanilla && (
+        <ImportarPlanillaModal
+          subjectId={subjectId}
+          courseId={courseId}
+          parallelId={parallelId}
+          students={students}
+          evaluaciones={evaluaciones}
+          onClose={() => setShowImportarPlanilla(false)}
+          onImported={async () => {
+            setShowImportarPlanilla(false);
+            await cargarEvaluaciones();
+            await cargarNotasEvaluacion(evaluacionId);
+            setSaved(true);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function EvaluacionModal({ tipos, evaluacion, dimensionPorDefecto, onClose, onSave }) {
+  const [titulo, setTitulo] = useState(evaluacion?.title || "");
+  const [evaluationTypeId, setEvaluationTypeId] = useState(evaluacion?.evaluation_type_id || tipos[0]?.id || "");
+  const [fecha, setFecha] = useState(evaluacion?.evaluation_date || new Date().toISOString().slice(0, 10));
+  const [puntajeMax, setPuntajeMax] = useState(evaluacion?.maximum_score ?? 10);
+  const [dimension, setDimension] = useState(evaluacion?.dimension || dimensionPorDefecto);
+
+  const guardar = () => {
+    if (!titulo.trim()) return;
+    onSave({ id: evaluacion?.id, titulo: titulo.trim(), evaluationTypeId, fecha, puntajeMax: Number(puntajeMax), dimension });
+  };
+
+  return (
+    <Modal title={evaluacion ? "Editar evaluación" : "Nueva evaluación"} onClose={onClose} maxWidth="sm:max-w-md"
+      footer={
+        <>
+          <button onClick={onClose} className="text-sm text-slate-600 px-4 py-2">Cancelar</button>
+          <button onClick={guardar} className="text-sm bg-slate-900 text-white px-4 py-2 rounded hover:bg-slate-800">
+            {evaluacion ? "Guardar cambios" : "Crear evaluación"}
+          </button>
+        </>
+      }
+    >
+      <div>
+        <label className="block text-xs font-medium text-slate-600 mb-1.5">Dimensión</label>
+        <select value={dimension} onChange={(e) => setDimension(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm">
+          {DIMENSIONES.map((d) => <option key={d.key} value={d.key}>{d.label} (/{d.max})</option>)}
+        </select>
+      </div>
+      <Field label="Título" value={titulo} onChange={setTitulo} placeholder="Ej. Prueba del segundo bimestre" required />
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1.5">Tipo</label>
+          <select value={evaluationTypeId} onChange={(e) => setEvaluationTypeId(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm">
+            {tipos.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </div>
+        <Field label="Fecha" type="date" value={fecha} onChange={setFecha} />
+      </div>
+      <Field label="Puntaje máximo" type="number" value={puntajeMax} onChange={setPuntajeMax} />
+    </Modal>
   );
 }
 
@@ -409,41 +593,292 @@ function ImportarNotasModal({ evaluacion, students, onClose, onImported }) {
   );
 }
 
-function NuevaEvaluacionModal({ tipos, onClose, onSave }) {
-  const [titulo, setTitulo] = useState("");
-  const [evaluationTypeId, setEvaluationTypeId] = useState(tipos[0]?.id || "");
-  const [fecha, setFecha] = useState(() => new Date().toISOString().slice(0, 10));
-  const [puntajeMax, setPuntajeMax] = useState(100);
-  const [ponderacion, setPonderacion] = useState(20);
+function ImportarPlanillaModal({ subjectId, courseId, parallelId, students, evaluaciones, onClose, onImported }) {
+  const { user } = useAuth();
+  const [fileName, setFileName] = useState("");
+  const [workbook, setWorkbook] = useState(null);
+  const [hojas, setHojas] = useState([]);
+  const [hojaElegida, setHojaElegida] = useState("");
+  const [resultado, setResultado] = useState(null); // salida de parsearPlanillaCompleta
+  const [error, setError] = useState("");
+  const [importando, setImportando] = useState(false);
+  const [resumen, setResumen] = useState(null);
+  const inputRef = useRef(null);
 
-  const guardar = () => {
-    if (!titulo.trim()) return;
-    onSave({ titulo: titulo.trim(), evaluationTypeId, fecha, puntajeMax: Number(puntajeMax), ponderacion: Number(ponderacion) });
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setError("");
+    setResultado(null);
+    setFileName(file.name);
+    try {
+      const { workbook: wb, hojas: encontradas } = await leerLibroPlanilla(file);
+      if (encontradas.length === 0) {
+        setError('No se encontró ninguna hoja de trimestre (se busca un nombre tipo "REG1erTRIM", "REG2doTRIM", etc.) en este archivo.');
+        return;
+      }
+      setWorkbook(wb);
+      setHojas(encontradas);
+      if (encontradas.length === 1) {
+        analizarHoja(wb, encontradas[0]);
+      }
+    } catch (err) {
+      setError("No se pudo leer el archivo. Verifica que sea un Excel (.xlsx) válido.");
+    }
+  };
+
+  const analizarHoja = (wb, nombreHoja) => {
+    setHojaElegida(nombreHoja);
+    const sheet = wb.Sheets[nombreHoja];
+    const parsed = parsearPlanillaCompleta(sheet);
+    if (!parsed) {
+      setError(`No se reconoció el formato dentro de la hoja "${nombreHoja}".`);
+      return;
+    }
+    setResultado(parsed);
+  };
+
+  // Cruce de alumnos del archivo contra los alumnos ya registrados en este curso/paralelo
+  const alumnosCruzados = useMemo(() => {
+    if (!resultado) return [];
+    return resultado.alumnos.map((a) => {
+      const objetivo = normalizarNombre(a.nombreCompleto);
+      const match = students.find((s) => normalizarNombre(`${s.last_name} ${s.first_name}`) === objetivo);
+      return { ...a, alumnoDB: match || null };
+    });
+  }, [resultado, students]);
+
+  const totalCriterios = resultado
+    ? resultado.criterios.ser.length + resultado.criterios.saber.length + resultado.criterios.hacer.length
+    : 0;
+  const criteriosNuevos = (dim) => {
+    if (!resultado) return 0;
+    const existentes = new Set(
+      evaluaciones.filter((e) => (e.dimension || "hacer") === dim).map((e) => e.title.trim().toLowerCase())
+    );
+    return resultado.criterios[dim].filter((c) => !existentes.has(c.titulo.trim().toLowerCase())).length;
+  };
+
+  const encontrados = alumnosCruzados.filter((a) => a.alumnoDB).length;
+  const noEncontrados = alumnosCruzados.length - encontrados;
+
+  const confirmar = async () => {
+    if (!resultado) return;
+    setImportando(true);
+    setError("");
+    try {
+      // Paso 1: crear o reutilizar las evaluaciones de cada criterio detectado
+      const idsPorDimension = { ser: [], saber: [], hacer: [] };
+      for (const dim of ["ser", "saber", "hacer"]) {
+        for (const criterio of resultado.criterios[dim]) {
+          const existente = evaluaciones.find(
+            (e) => (e.dimension || "hacer") === dim && e.title.trim().toLowerCase() === criterio.titulo.trim().toLowerCase()
+          );
+          if (existente) {
+            idsPorDimension[dim].push(existente.id);
+          } else {
+            const { data, error: errIns } = await supabase.from("evaluations").insert({
+              subject_id: subjectId, teacher_id: user.id, course_id: courseId, parallel_id: parallelId,
+              dimension: dim, title: criterio.titulo, evaluation_date: new Date().toISOString().slice(0, 10),
+              maximum_score: DIMENSION_MAX[dim],
+            }).select().single();
+            if (errIns) throw errIns;
+            idsPorDimension[dim].push(data.id);
+            evaluaciones.push(data); // para que futuras vueltas del loop lo detecten como existente
+          }
+        }
+      }
+
+      // Paso 2: autoevaluación (una sola evaluación reutilizable)
+      const hayAutoeval = alumnosCruzados.some((a) => a.valores.autoeval !== null);
+      let autoevalId = null;
+      if (hayAutoeval) {
+        const existente = evaluaciones.find((e) => (e.dimension || "hacer") === "autoevaluacion");
+        if (existente) {
+          autoevalId = existente.id;
+        } else {
+          const { data, error: errIns } = await supabase.from("evaluations").insert({
+            subject_id: subjectId, teacher_id: user.id, course_id: courseId, parallel_id: parallelId,
+            dimension: "autoevaluacion", title: "Autoevaluación", evaluation_date: new Date().toISOString().slice(0, 10),
+            maximum_score: DIMENSION_MAX.autoevaluacion,
+          }).select().single();
+          if (errIns) throw errIns;
+          autoevalId = data.id;
+        }
+      }
+
+      // Paso 3: armar todas las notas a guardar
+      const registros = [];
+      for (const a of alumnosCruzados) {
+        if (!a.alumnoDB) continue;
+        for (const dim of ["ser", "saber", "hacer"]) {
+          a.valores[dim].forEach((valor, idx) => {
+            if (valor === null) return;
+            registros.push({
+              evaluation_id: idsPorDimension[dim][idx],
+              student_id: a.alumnoDB.id,
+              score: valor,
+              registered_by: user.id,
+              updated_at: new Date().toISOString(),
+            });
+          });
+        }
+        if (autoevalId && a.valores.autoeval !== null) {
+          registros.push({
+            evaluation_id: autoevalId,
+            student_id: a.alumnoDB.id,
+            score: a.valores.autoeval,
+            registered_by: user.id,
+            updated_at: new Date().toISOString(),
+          });
+        }
+      }
+
+      if (registros.length > 0) {
+        const { error: errUp } = await supabase.from("grades").upsert(registros, { onConflict: "evaluation_id,student_id" });
+        if (errUp) throw errUp;
+      }
+
+      setResumen({ criterios: totalCriterios, notas: registros.length, alumnos: encontrados });
+      setImportando(false);
+      await onImported();
+    } catch (err) {
+      setImportando(false);
+      setError(err.message || "Ocurrió un error al importar.");
+    }
   };
 
   return (
-    <Modal title="Nueva evaluación" onClose={onClose} maxWidth="sm:max-w-md"
+    <Modal
+      title="Importar planilla completa"
+      onClose={onClose}
+      maxWidth="sm:max-w-3xl"
       footer={
-        <>
-          <button onClick={onClose} className="text-sm text-slate-600 px-4 py-2">Cancelar</button>
-          <button onClick={guardar} className="text-sm bg-slate-900 text-white px-4 py-2 rounded hover:bg-slate-800">Crear evaluación</button>
-        </>
+        resultado ? (
+          <>
+            <button onClick={onClose} className="text-sm text-slate-600 px-4 py-2">Cerrar</button>
+            <button
+              onClick={confirmar}
+              disabled={importando || encontrados === 0}
+              className="text-sm bg-slate-900 text-white px-4 py-2 rounded hover:bg-slate-800 disabled:opacity-40"
+            >
+              {importando ? "Importando…" : `Confirmar importación (${encontrados} alumnos)`}
+            </button>
+          </>
+        ) : (
+          <button onClick={onClose} className="text-sm text-slate-600 px-4 py-2">Cerrar</button>
+        )
       }
     >
-      <Field label="Título" value={titulo} onChange={setTitulo} placeholder="Ej. Prueba del segundo bimestre" required />
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1.5">Tipo</label>
-          <select value={evaluationTypeId} onChange={(e) => setEvaluationTypeId(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm">
-            {tipos.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
+      <p className="text-xs text-slate-500">
+        Sube el archivo Excel completo del curso (el mismo que usas para llevar el registro de
+        calificaciones). El sistema detecta automáticamente cuántos criterios tiene cada dimensión
+        — no importa si varían entre materias o cursos — y crea o reutiliza las evaluaciones
+        correspondientes.
+      </p>
+
+      {!resultado && !resumen && (
+        <>
+          <div
+            onClick={() => inputRef.current?.click()}
+            className="border-2 border-dashed border-slate-300 rounded p-8 text-center cursor-pointer hover:border-emerald-500 hover:bg-emerald-50/30 transition-colors"
+          >
+            <Upload className="h-6 w-6 text-slate-400 mx-auto mb-2" />
+            <p className="text-sm text-slate-600">{fileName || "Haz clic para seleccionar el archivo Excel del curso"}</p>
+            <input ref={inputRef} type="file" accept=".xlsx,.xls" onChange={handleFile} className="hidden" />
+          </div>
+
+          {hojas.length > 1 && !resultado && (
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1.5">¿Qué trimestre quieres importar?</label>
+              <div className="flex flex-wrap gap-2">
+                {hojas.map((h) => (
+                  <button
+                    key={h}
+                    onClick={() => analizarHoja(workbook, h)}
+                    className={`px-3 py-1.5 rounded-full text-xs border ${hojaElegida === h ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 border-slate-300"}`}
+                  >
+                    {h}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {error && <p className="text-sm text-red-700 flex items-center gap-2"><AlertTriangle className="h-4 w-4 shrink-0" /> {error}</p>}
+        </>
+      )}
+
+      {resultado && !resumen && (
+        <>
+          {(resultado.areaDetectada || resultado.cursoDetectado) && (
+            <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded px-3 py-2">
+              Detectado en el archivo: <b>{resultado.areaDetectada || "—"}</b> · <b>{resultado.cursoDetectado || "—"}</b>.
+              Verifica que coincida con la Materia/Curso/Paralelo que seleccionaste arriba antes de confirmar.
+            </p>
+          )}
+
+          <div className="grid grid-cols-3 gap-3 text-center text-xs">
+            <div className="border border-slate-200 rounded p-3">
+              <p className="text-slate-500">SER</p>
+              <p className="font-ledger text-lg font-semibold text-slate-900">{resultado.criterios.ser.length}</p>
+              <p className="text-slate-400">{criteriosNuevos("ser")} nuevo(s)</p>
+            </div>
+            <div className="border border-slate-200 rounded p-3">
+              <p className="text-slate-500">SABER</p>
+              <p className="font-ledger text-lg font-semibold text-slate-900">{resultado.criterios.saber.length}</p>
+              <p className="text-slate-400">{criteriosNuevos("saber")} nuevo(s)</p>
+            </div>
+            <div className="border border-slate-200 rounded p-3">
+              <p className="text-slate-500">HACER</p>
+              <p className="font-ledger text-lg font-semibold text-slate-900">{resultado.criterios.hacer.length}</p>
+              <p className="text-slate-400">{criteriosNuevos("hacer")} nuevo(s)</p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">{encontrados} alumnos encontrados</span>
+            {noEncontrados > 0 && <span className="px-2.5 py-1 rounded-full bg-red-50 text-red-700 border border-red-200">{noEncontrados} no encontrados</span>}
+            <button onClick={() => { setResultado(null); setFileName(""); setHojas([]); }} className="ml-auto text-xs text-slate-500 hover:underline">Elegir otro archivo</button>
+          </div>
+
+          <div className="border border-slate-200 rounded overflow-x-auto max-h-64 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 text-slate-500 sticky top-0">
+                <tr>
+                  <th className="px-3 py-2 text-left font-medium">Nombre en el archivo</th>
+                  <th className="px-3 py-2 text-left font-medium">Estado</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {alumnosCruzados.map((a, i) => (
+                  <tr key={i} className={a.alumnoDB ? "" : "bg-red-50/40"}>
+                    <td className="px-3 py-2 whitespace-nowrap">{a.nombreCompleto}</td>
+                    <td className="px-3 py-2">
+                      {a.alumnoDB ? (
+                        <span className="text-emerald-700 flex items-center gap-1 whitespace-nowrap"><Check className="h-3.5 w-3.5" /> {a.alumnoDB.first_name} {a.alumnoDB.last_name}</span>
+                      ) : (
+                        <span className="text-red-700">No encontrado en este curso/paralelo</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {error && <p className="text-sm text-red-700 flex items-center gap-2"><AlertTriangle className="h-4 w-4 shrink-0" /> {error}</p>}
+        </>
+      )}
+
+      {resumen && (
+        <div className="text-center py-6 space-y-2">
+          <Check className="h-8 w-8 text-emerald-600 mx-auto" />
+          <p className="text-sm text-slate-700">
+            Se crearon/actualizaron <b>{resumen.criterios}</b> criterios y se guardaron <b>{resumen.notas}</b> notas
+            para <b>{resumen.alumnos}</b> alumnos.
+          </p>
         </div>
-        <Field label="Fecha" type="date" value={fecha} onChange={setFecha} />
-      </div>
-      <div className="grid grid-cols-2 gap-4">
-        <Field label="Puntaje máximo" type="number" value={puntajeMax} onChange={setPuntajeMax} />
-        <Field label="Ponderación (%)" type="number" value={ponderacion} onChange={setPonderacion} />
-      </div>
+      )}
     </Modal>
   );
 }
