@@ -29,7 +29,7 @@ export default function Notas() {
   const [dimensionActiva, setDimensionActiva] = useState("ser");
   const [evaluaciones, setEvaluaciones] = useState([]);
   const [evaluacionId, setEvaluacionId] = useState("");
-  const [notas, setNotas] = useState({});
+  const [edicionesPendientes, setEdicionesPendientes] = useState({}); // `${evaluationId}:${studentId}` -> valor en edición
   const [notasTodas, setNotasTodas] = useState([]);
 
   const [showEvalModal, setShowEvalModal] = useState(false);
@@ -101,21 +101,21 @@ export default function Notas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dimensionActiva, evaluaciones]);
 
-  async function cargarNotasEvaluacion(id) {
-    if (!id) { setNotas({}); return; }
-    const { data } = await supabase.from("grades").select("*").eq("evaluation_id", id);
-    const mapa = {};
-    (data || []).forEach((n) => { mapa[n.student_id] = n.score ?? ""; });
-    setNotas(mapa);
-    setSaved(false);
+  const evaluacionActual = evaluaciones.find((e) => e.id === evaluacionId);
+
+  // Valor que debe mostrarse en una celda de la grilla: lo que el profesor
+  // está editando ahora mismo (si lo hay), o si no, lo que ya está guardado.
+  function valorCelda(evaluationId, studentId) {
+    const clave = `${evaluationId}:${studentId}`;
+    if (clave in edicionesPendientes) return edicionesPendientes[clave];
+    const nota = notasTodas.find((n) => n.evaluation_id === evaluationId && n.student_id === studentId);
+    return nota?.score ?? "";
   }
 
-  useEffect(() => {
-    cargarNotasEvaluacion(evaluacionId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [evaluacionId]);
-
-  const evaluacionActual = evaluaciones.find((e) => e.id === evaluacionId);
+  function editarCelda(evaluationId, studentId, valor) {
+    setEdicionesPendientes((prev) => ({ ...prev, [`${evaluationId}:${studentId}`]: valor }));
+    setSaved(false);
+  }
 
   function promedioDimension(studentId, dimensionKey) {
     const evalsDeLaDimension = evaluaciones.filter((e) => (e.dimension || "hacer") === dimensionKey);
@@ -135,19 +135,29 @@ export default function Notas() {
     return totalMaestro(studentId) + (promedioDimension(studentId, "autoevaluacion") ?? 0);
   }
 
-  const guardarNotas = async () => {
-    if (!evaluacionId) return;
+  const guardarGridNotas = async () => {
+    const idsDimension = new Set(evaluacionesDimension.map((e) => e.id));
+    const claves = Object.keys(edicionesPendientes).filter((k) => idsDimension.has(k.split(":")[0]));
+    if (claves.length === 0) return;
     setGuardando(true);
-    const registros = Object.entries(notas)
-      .filter(([, score]) => score !== "" && score !== null && score !== undefined)
-      .map(([studentId, score]) => ({
-        evaluation_id: evaluacionId, student_id: studentId, score: Number(score), registered_by: user.id,
-        updated_at: new Date().toISOString(),
-      }));
+    const registros = claves
+      .filter((k) => edicionesPendientes[k] !== "" && edicionesPendientes[k] !== null)
+      .map((k) => {
+        const [evaluationId, studentId] = k.split(":");
+        return {
+          evaluation_id: evaluationId, student_id: studentId, score: Number(edicionesPendientes[k]),
+          registered_by: user.id, updated_at: new Date().toISOString(),
+        };
+      });
     if (registros.length > 0) {
       await supabase.from("grades").upsert(registros, { onConflict: "evaluation_id,student_id" });
     }
     await cargarEvaluaciones();
+    setEdicionesPendientes((prev) => {
+      const copia = { ...prev };
+      claves.forEach((k) => delete copia[k]);
+      return copia;
+    });
     setGuardando(false);
     setSaved(true);
   };
@@ -232,89 +242,99 @@ export default function Notas() {
             </button>
           </div>
 
-          <div className="grid lg:grid-cols-5 gap-6">
-            <div className="lg:col-span-2 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-xs text-slate-500">Evaluaciones de {DIMENSIONES.find((d) => d.key === dimensionActiva)?.label}</p>
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => setShowImportarNotas(true)}
-                    disabled={!evaluacionActual}
-                    className="inline-flex items-center gap-1 text-xs text-slate-600 hover:underline disabled:text-slate-300 disabled:no-underline disabled:cursor-not-allowed"
-                  >
-                    <FileSpreadsheet className="h-3.5 w-3.5" /> Importar notas
-                  </button>
-                  <button
-                    onClick={() => { setEvaluacionEditando(null); setShowEvalModal(true); }}
-                    className="inline-flex items-center gap-1 text-xs text-emerald-700 hover:underline"
-                  >
-                    <Plus className="h-3.5 w-3.5" /> Nueva evaluación
-                  </button>
-                </div>
-              </div>
-              <div className="bg-white border border-slate-200 rounded divide-y divide-slate-100">
-                {evaluacionesDimension.map((e) => (
-                  <div
-                    key={e.id}
-                    className={`flex items-center justify-between p-3.5 hover:bg-slate-50 ${evaluacionId === e.id ? "bg-emerald-50/60 border-l-2 border-emerald-600" : "border-l-2 border-transparent"}`}
-                  >
-                    <button onClick={() => setEvaluacionId(e.id)} className="flex-1 text-left">
-                      <p className="text-sm text-slate-800">{e.title}</p>
-                      <p className="text-xs text-slate-500 mt-0.5">{e.evaluation_date} · máx {e.maximum_score} pts</p>
-                    </button>
-                    <button
-                      onClick={() => { setEvaluacionEditando(e); setShowEvalModal(true); }}
-                      className="text-slate-400 hover:text-slate-700 p-1"
-                      title="Editar evaluación"
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))}
-                {evaluacionesDimension.length === 0 && <p className="p-6 text-sm text-slate-400 text-center">Sin evaluaciones en esta dimensión todavía.</p>}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <p className="text-xs text-slate-500">
+                Criterios de {DIMENSIONES.find((d) => d.key === dimensionActiva)?.label}
+                {evaluacionActual && <span className="text-slate-400"> · seleccionado para importar: {evaluacionActual.title}</span>}
+              </p>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setShowImportarNotas(true)}
+                  disabled={!evaluacionActual}
+                  className="inline-flex items-center gap-1 text-xs text-slate-600 hover:underline disabled:text-slate-300 disabled:no-underline disabled:cursor-not-allowed"
+                >
+                  <FileSpreadsheet className="h-3.5 w-3.5" /> Importar notas de 1 criterio
+                </button>
+                <button
+                  onClick={() => { setEvaluacionEditando(null); setShowEvalModal(true); }}
+                  className="inline-flex items-center gap-1 text-xs text-emerald-700 hover:underline"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Nueva evaluación
+                </button>
               </div>
             </div>
 
-            <div className="lg:col-span-3 space-y-3">
-              {evaluacionActual ? (
-                <>
-                  <div className="bg-white border border-slate-200 rounded p-4">
-                    <p className="font-ledger text-base font-semibold text-slate-900">{evaluacionActual.title}</p>
-                    <p className="text-xs text-slate-500 mt-1">
-                      {DIMENSIONES.find((d) => d.key === (evaluacionActual.dimension || "hacer"))?.label} · {evaluacionActual.evaluation_date} · Puntaje máximo {evaluacionActual.maximum_score}
-                    </p>
-                  </div>
-                  <div className="bg-white border border-slate-200 rounded divide-y divide-slate-100">
-                    {students.map((s) => (
-                      <div key={s.id} className="p-3.5 flex items-center justify-between gap-3">
-                        <div>
-                          <p className="text-sm text-slate-800">{s.first_name} {s.last_name}</p>
-                          <p className="text-xs text-slate-500">{s.student_code || "s/código"}</p>
-                        </div>
-                        <input
-                          type="number" min="0" max={evaluacionActual.maximum_score}
-                          value={notas[s.id] ?? ""}
-                          onChange={(e) => { setNotas((prev) => ({ ...prev, [s.id]: e.target.value })); setSaved(false); }}
-                          className="w-24 rounded border border-slate-300 px-2.5 py-1.5 text-sm text-right"
-                          placeholder="—"
-                        />
-                      </div>
-                    ))}
-                    {students.length === 0 && <p className="p-6 text-sm text-slate-400 text-center">No hay estudiantes activos en este curso y paralelo.</p>}
-                  </div>
-                  <div className="flex items-center justify-end gap-3">
-                    {saved && <span className="text-xs text-emerald-700 flex items-center gap-1"><Check className="h-3.5 w-3.5" /> Notas guardadas</span>}
-                    <button onClick={guardarNotas} disabled={guardando} className="inline-flex items-center gap-2 rounded bg-slate-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">
-                      {guardando ? "Guardando…" : "Guardar notas"}
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <div className="bg-white border border-slate-200 rounded p-8 text-center text-sm text-slate-400">
-                  Crea una evaluación en esta dimensión para empezar a registrar notas.
+            {evaluacionesDimension.length > 0 ? (
+              <>
+                <div className="bg-white border border-slate-200 rounded overflow-x-auto">
+                  <table className="text-sm border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-xs text-slate-500">
+                        <th className="px-4 py-2 font-medium text-left sticky left-0 bg-white z-10 whitespace-nowrap">Estudiante</th>
+                        {evaluacionesDimension.map((e) => (
+                          <th
+                            key={e.id}
+                            onClick={() => setEvaluacionId(e.id)}
+                            title={e.title}
+                            className={`px-1.5 py-2 font-medium text-center align-bottom cursor-pointer select-none ${evaluacionId === e.id ? "bg-emerald-50" : ""}`}
+                            style={{ minWidth: 86, maxWidth: 110 }}
+                          >
+                            <div className="flex items-start justify-center gap-1">
+                              <span className="line-clamp-2 leading-tight text-[11px] normal-case font-normal text-slate-700">{e.title}</span>
+                              <button
+                                onClick={(ev) => { ev.stopPropagation(); setEvaluacionEditando(e); setShowEvalModal(true); }}
+                                className="text-slate-300 hover:text-slate-600 shrink-0"
+                                title="Editar criterio"
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </button>
+                            </div>
+                            <p className="text-[10px] text-slate-400 font-normal mt-0.5">/{e.maximum_score}</p>
+                          </th>
+                        ))}
+                        <th className="px-4 py-2 font-medium text-right whitespace-nowrap">Promedio</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {students.map((s) => {
+                        const prom = promedioDimension(s.id, dimensionActiva);
+                        return (
+                          <tr key={s.id}>
+                            <td className="px-4 py-1.5 text-slate-800 whitespace-nowrap sticky left-0 bg-white z-10">{s.first_name} {s.last_name}</td>
+                            {evaluacionesDimension.map((e) => (
+                              <td key={e.id} className="px-1 py-1.5 text-center">
+                                <input
+                                  type="number" min="0" max={e.maximum_score}
+                                  value={valorCelda(e.id, s.id)}
+                                  onChange={(ev) => editarCelda(e.id, s.id, ev.target.value)}
+                                  className="w-16 rounded border border-slate-300 px-1 py-1 text-xs text-center"
+                                  placeholder="—"
+                                />
+                              </td>
+                            ))}
+                            <td className="px-4 py-1.5 text-right text-slate-700 font-medium whitespace-nowrap">{prom !== null ? prom.toFixed(1) : "—"}</td>
+                          </tr>
+                        );
+                      })}
+                      {students.length === 0 && (
+                        <tr><td colSpan={evaluacionesDimension.length + 2} className="p-6 text-sm text-slate-400 text-center">No hay estudiantes activos en este curso y paralelo.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
-              )}
-            </div>
+                <div className="flex items-center justify-end gap-3">
+                  {saved && <span className="text-xs text-emerald-700 flex items-center gap-1"><Check className="h-3.5 w-3.5" /> Notas guardadas</span>}
+                  <button onClick={guardarGridNotas} disabled={guardando} className="inline-flex items-center gap-2 rounded bg-slate-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">
+                    {guardando ? "Guardando…" : "Guardar notas"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="bg-white border border-slate-200 rounded p-8 text-center text-sm text-slate-400">
+                Crea una evaluación en esta dimensión para empezar a registrar notas.
+              </div>
+            )}
           </div>
 
           <div className="space-y-2">
@@ -376,7 +396,6 @@ export default function Notas() {
           onClose={() => setShowImportarNotas(false)}
           onImported={async () => {
             setShowImportarNotas(false);
-            await cargarNotasEvaluacion(evaluacionId);
             await cargarEvaluaciones();
             setSaved(true);
           }}
@@ -393,7 +412,6 @@ export default function Notas() {
           onImported={async () => {
             setShowImportarPlanilla(false);
             await cargarEvaluaciones();
-            await cargarNotasEvaluacion(evaluacionId);
             setSaved(true);
           }}
         />
