@@ -33,6 +33,17 @@ const CAMPOS_IMPORTABLES = [
 const clavePersona = (apellido, nombre, cursoId, paraleloId) =>
   `${normalizar(apellido)}|${normalizar(nombre)}|${cursoId ?? ""}|${paraleloId ?? ""}`;
 
+// El campo "gender" puede venir de distintas formas según cómo se cargó el
+// alumno (import del Excel oficial, alta manual, etc.): "M"/"F", "Masculino"/
+// "Femenino" o "Varón"/"Mujer". Se compara por coincidencia exacta (no por
+// inicial) para no confundir "Masculino" con "Mujer", que también empieza con M.
+function clasificarGenero(valor) {
+  const g = normalizar(valor);
+  if (["M", "MASCULINO", "VARON", "HOMBRE"].includes(g)) return "M";
+  if (["F", "FEMENINO", "MUJER"].includes(g)) return "F";
+  return null;
+}
+
 export default function Alumnos() {
   const { isAdmin } = useAuth();
   const { permissions, institutionName } = useSettings();
@@ -89,15 +100,30 @@ export default function Alumnos() {
   }, [cursoFiltro]);
 
   const filtrados = useMemo(() => {
+    // normalizar() quita tildes y pasa a mayúsculas, así "Pena" encuentra a "Peña"
+    // y "Munecas" encuentra a "Muñecas" (nombres compuestos frecuentes en el curso).
+    const consulta = normalizar(query);
     return alumnos.filter((a) => {
-      const nombreCompleto = `${a.first_name} ${a.last_name} ${a.student_code || ""}`.toLowerCase();
-      const matchQuery = nombreCompleto.includes(query.toLowerCase());
+      const nombreCompleto = normalizar(`${a.first_name} ${a.last_name} ${a.student_code || ""}`);
+      const matchQuery = !consulta || nombreCompleto.includes(consulta);
       const matchCurso = !cursoFiltro || a.course_id === cursoFiltro;
       const matchParalelo = !paraleloFiltro || a.parallel_id === paraleloFiltro;
       const matchEstado = mostrarInactivos || a.active;
       return matchQuery && matchCurso && matchParalelo && matchEstado;
     });
   }, [alumnos, query, cursoFiltro, paraleloFiltro, mostrarInactivos]);
+
+  // Conteo de lo que está mostrándose en pantalla ahora mismo (respeta los
+  // mismos filtros que la tabla: curso, paralelo, búsqueda y mostrar inactivos).
+  const conteoGenero = useMemo(() => {
+    let hombres = 0, mujeres = 0;
+    filtrados.forEach((a) => {
+      const g = clasificarGenero(a.gender);
+      if (g === "M") hombres++;
+      else if (g === "F") mujeres++;
+    });
+    return { total: filtrados.length, hombres, mujeres };
+  }, [filtrados]);
 
   const inactivosOcultos = useMemo(
     () => !mostrarInactivos && alumnos.some((a) => !a.active && (!cursoFiltro || a.course_id === cursoFiltro) && (!paraleloFiltro || a.parallel_id === paraleloFiltro)),
@@ -182,15 +208,6 @@ export default function Alumnos() {
     <div className="p-4 md:p-8 space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
         <div className="flex-1 flex flex-col sm:flex-row gap-3">
-          <div className="relative flex-1 max-w-sm">
-            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Buscar por nombre o código"
-              className="w-full rounded border border-slate-300 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600"
-            />
-          </div>
           <select value={cursoFiltro} onChange={(e) => setCursoFiltro(e.target.value)} className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-700">
             <option value="">Todos los cursos</option>
             {courses.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -235,6 +252,34 @@ export default function Alumnos() {
             <button onClick={() => setShowForm(true)} className="inline-flex items-center gap-2 rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800">
               <Plus className="h-4 w-4" /> Nuevo alumno
             </button>
+          </div>
+        )}
+      </div>
+
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
+        <div>
+          <label htmlFor="buscar-alumno" className="block text-xs font-medium text-slate-600 mb-1.5">
+            Buscar alumno
+          </label>
+          <div className="relative max-w-sm">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+            <input
+              id="buscar-alumno"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Nombre, apellido o código"
+              className="w-full rounded border border-slate-300 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600"
+            />
+          </div>
+        </div>
+
+        {cursoFiltro && conteoGenero.total > 0 && (
+          <div className="flex items-center gap-3 text-sm text-slate-600 sm:pb-2">
+            <span><b className="text-slate-900">{conteoGenero.total}</b> alumno{conteoGenero.total !== 1 ? "s" : ""}</span>
+            <span className="text-slate-300">·</span>
+            <span><b className="text-slate-900">{conteoGenero.hombres}</b> hombres</span>
+            <span className="text-slate-300">·</span>
+            <span><b className="text-slate-900">{conteoGenero.mujeres}</b> mujeres</span>
           </div>
         )}
       </div>
