@@ -1,18 +1,31 @@
-import { useEffect, useMemo, useState, useRef } from "react";
-import { Plus, Check, FileSpreadsheet, Upload, AlertTriangle, Download, Pencil, FileUp } from "lucide-react";
+import { useEffect, useMemo, useState, useRef, Fragment } from "react";
+import { Plus, Check, FileSpreadsheet, Upload, AlertTriangle, Download, Pencil, FileUp, Trash2 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { useAuth } from "../context/AuthContext";
 import { Field, Modal } from "../components/ui";
 import { leerArchivoNotas, generarPlantillaNotas } from "../lib/importNotas";
-import { leerLibroPlanilla, parsearPlanillaCompleta, normalizarNombre } from "../lib/importPlanilla";
+import { leerLibroPlanilla, parsearPlanillaCompleta, normalizarNombre, tituloSinFecha } from "../lib/importPlanilla";
 
 const DIMENSIONES = [
   { key: "ser", label: "SER", max: 10 },
   { key: "saber", label: "SABER", max: 45 },
   { key: "hacer", label: "HACER", max: 40 },
-  { key: "autoevaluacion", label: "Autoevaluación", max: 5 },
+  { key: "autoevaluacion", label: "AUTOEV. DEL ESTUDIANTE", max: 5 },
 ];
 const DIMENSION_MAX = { ser: 10, saber: 45, hacer: 40, autoevaluacion: 5 };
+
+// Mismo orden que el registro en papel: SER, SABER, HACER (evaluación del maestro, /95),
+// luego TOTAL, luego Autoevaluación del estudiante (/5), y por último la calificación trimestral.
+const DIMENSIONES_MAESTRO = DIMENSIONES.filter((d) => d.key !== "autoevaluacion");
+const DIMENSION_AUTOEVAL = DIMENSIONES.find((d) => d.key === "autoevaluacion");
+
+// Color de fondo del encabezado de cada grupo en la tabla combinada (SER/SABER/HACER juntos).
+const COLOR_DIMENSION = {
+  ser: "bg-indigo-50 text-indigo-800",
+  saber: "bg-sky-50 text-sky-800",
+  hacer: "bg-amber-50 text-amber-800",
+  autoevaluacion: "bg-violet-50 text-violet-800",
+};
 
 export default function Notas() {
   const { user } = useAuth();
@@ -34,10 +47,52 @@ export default function Notas() {
 
   const [showEvalModal, setShowEvalModal] = useState(false);
   const [evaluacionEditando, setEvaluacionEditando] = useState(null);
+  const [criterioAEliminar, setCriterioAEliminar] = useState(null);
+  const [eliminandoCriterio, setEliminandoCriterio] = useState(false);
+  const [errorEliminar, setErrorEliminar] = useState("");
   const [showImportarNotas, setShowImportarNotas] = useState(false);
   const [showImportarPlanilla, setShowImportarPlanilla] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [popupGuardado, setPopupGuardado] = useState(false);
+  const [filaResaltada, setFilaResaltada] = useState(null); // id del alumno con la fila resaltada
   const [guardando, setGuardando] = useState(false);
+
+  // Barra de desplazamiento horizontal superior sincronizada con la tabla de notas.
+  // Permite ir y volver de izquierda a derecha sin perder de vista los botones.
+  const tablaScrollRef = useRef<HTMLDivElement>(null);
+  const barraSupRef = useRef<HTMLDivElement>(null);
+  const [anchoBarraSup, setAnchoBarraSup] = useState(0);
+
+  useEffect(() => {
+    const tabla = tablaScrollRef.current;
+    const barra = barraSupRef.current;
+    if (!tabla || !barra) return;
+    let sincronizando = false;
+    const alMoverTabla = () => {
+      if (sincronizando) return;
+      sincronizando = true;
+      barra.scrollLeft = tabla.scrollLeft;
+      sincronizando = false;
+    };
+    const alMoverBarra = () => {
+      if (sincronizando) return;
+      sincronizando = true;
+      tabla.scrollLeft = barra.scrollLeft;
+      sincronizando = false;
+    };
+    const medir = () => setAnchoBarraSup(tabla.scrollWidth);
+    medir();
+    const t = setTimeout(medir, 300);
+    tabla.addEventListener("scroll", alMoverTabla);
+    barra.addEventListener("scroll", alMoverBarra);
+    window.addEventListener("resize", medir);
+    return () => {
+      tabla.removeEventListener("scroll", alMoverTabla);
+      barra.removeEventListener("scroll", alMoverBarra);
+      window.removeEventListener("resize", medir);
+      clearTimeout(t);
+    };
+  }, [evaluaciones.length, students.length]);
 
   useEffect(() => {
     async function cargarBase() {
@@ -72,7 +127,7 @@ export default function Notas() {
     const { data } = await supabase
       .from("evaluations").select("*")
       .eq("subject_id", subjectId).eq("course_id", courseId).eq("parallel_id", parallelId)
-      .order("evaluation_date", { ascending: false });
+      .order("evaluation_date", { ascending: true });
     setEvaluaciones(data || []);
     if (data && data.length > 0) {
       const { data: todasNotas } = await supabase.from("grades").select("*").in("evaluation_id", data.map((e) => e.id));
@@ -88,9 +143,32 @@ export default function Notas() {
   }, [subjectId, courseId, parallelId]);
 
   const evaluacionesDimension = useMemo(
-    () => evaluaciones.filter((e) => (e.dimension || "hacer") === dimensionActiva),
+    () => evaluaciones.filter((e) => (e.dimension || "hacer") === dimensionActiva).sort(ordenPorFecha),
     [evaluaciones, dimensionActiva]
   );
+
+  // Las mismas evaluaciones, pero agrupadas por las 4 dimensiones a la vez (no solo la
+  // activa). Esto es lo que permite mostrar SER + SABER + HACER + Autoevaluación juntos
+  // en una sola tabla, sin depender de qué botón esté seleccionado arriba.
+  // Se ordenan de la fecha más antigua a la más reciente.
+  const evaluacionesPorDimension = useMemo(() => {
+    const mapa = {};
+    for (const d of DIMENSIONES) {
+      mapa[d.key] = evaluaciones.filter((e) => (e.dimension || "hacer") === d.key).sort(ordenPorFecha);
+    }
+    return mapa;
+  }, [evaluaciones]);
+
+  // Conteo de alumnos del curso/paralelo seleccionado, por género.
+  const conteoAlumnos = useMemo(() => {
+    let hombres = 0, mujeres = 0;
+    students.forEach((s) => {
+      const g = clasificarGenero(s.gender);
+      if (g === "M") hombres++;
+      else if (g === "F") mujeres++;
+    });
+    return { total: students.length, hombres, mujeres };
+  }, [students]);
 
   useEffect(() => {
     if (evaluacionesDimension.length > 0) {
@@ -124,7 +202,8 @@ export default function Notas() {
       .filter((n) => n && n.score !== null && n.score !== undefined);
     if (notasDelAlumno.length === 0) return null;
     const suma = notasDelAlumno.reduce((acc, n) => acc + Number(n.score), 0);
-    return suma / notasDelAlumno.length;
+    // Todas las notas se muestran redondeadas, sin decimales.
+    return Math.round(suma / notasDelAlumno.length);
   }
 
   function totalMaestro(studentId) {
@@ -136,8 +215,11 @@ export default function Notas() {
   }
 
   const guardarGridNotas = async () => {
-    const idsDimension = new Set(evaluacionesDimension.map((e) => e.id));
-    const claves = Object.keys(edicionesPendientes).filter((k) => idsDimension.has(k.split(":")[0]));
+    // Antes esto solo guardaba las ediciones de la dimensión activa (la tabla solo
+    // mostraba una a la vez). Ahora la tabla muestra SER/SABER/HACER/Autoevaluación
+    // juntos, así que se guardan todas las celdas pendientes sin importar de qué
+    // dimensión sean.
+    const claves = Object.keys(edicionesPendientes);
     if (claves.length === 0) return;
     setGuardando(true);
     const registros = claves
@@ -160,6 +242,7 @@ export default function Notas() {
     });
     setGuardando(false);
     setSaved(true);
+    setPopupGuardado(true);
   };
 
   const guardarEvaluacion = async ({ id, titulo, evaluationTypeId, fecha, puntajeMax, dimension }) => {
@@ -188,6 +271,21 @@ export default function Notas() {
         setEvaluacionId(data.id);
       }
     }
+  };
+
+  const eliminarCriterio = async () => {
+    if (!criterioAEliminar) return;
+    setEliminandoCriterio(true);
+    setErrorEliminar("");
+    // Las notas del criterio se eliminan en cascada (FK on delete cascade).
+    const { error } = await supabase.from("evaluations").delete().eq("id", criterioAEliminar.id);
+    setEliminandoCriterio(false);
+    if (error) {
+      setErrorEliminar("No se pudo eliminar el criterio. Es posible que no tengas permiso o que haya un problema de conexión.");
+      return;
+    }
+    setCriterioAEliminar(null);
+    await cargarEvaluaciones();
   };
 
   return (
@@ -245,83 +343,196 @@ export default function Notas() {
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <p className="text-xs text-slate-500">
-                Criterios de {DIMENSIONES.find((d) => d.key === dimensionActiva)?.label}
-                {evaluacionActual && <span className="text-slate-400"> · seleccionado para importar: {evaluacionActual.title}</span>}
+                Todos los criterios de SER, SABER, HACER y Autoevaluación, juntos. Los botones de
+                arriba solo sirven para elegir en qué dimensión crear una evaluación nueva.
+                {evaluacionActual && <span className="text-slate-400"> · seleccionado para importar: {tituloSinFecha(evaluacionActual.title)}</span>}
               </p>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setShowImportarNotas(true)}
-                  disabled={!evaluacionActual}
-                  className="inline-flex items-center gap-1 text-xs text-slate-600 hover:underline disabled:text-slate-300 disabled:no-underline disabled:cursor-not-allowed"
-                >
-                  <FileSpreadsheet className="h-3.5 w-3.5" /> Importar notas de 1 criterio
-                </button>
-                <button
-                  onClick={() => { setEvaluacionEditando(null); setShowEvalModal(true); }}
-                  className="inline-flex items-center gap-1 text-xs text-emerald-700 hover:underline"
-                >
-                  <Plus className="h-3.5 w-3.5" /> Nueva evaluación
-                </button>
-              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                Total alumnos: <b>{conteoAlumnos.total}</b>
+              </span>
+              <span className="px-2.5 py-1 rounded-full bg-pink-50 text-pink-700 border border-pink-200">
+                Mujeres: <b>{conteoAlumnos.mujeres}</b>
+              </span>
+              <span className="px-2.5 py-1 rounded-full bg-sky-50 text-sky-700 border border-sky-200">
+                Hombres: <b>{conteoAlumnos.hombres}</b>
+              </span>
             </div>
 
-            {evaluacionesDimension.length > 0 ? (
+            {evaluaciones.length > 0 ? (
               <>
-                <div className="bg-white border border-slate-200 rounded overflow-x-auto">
+                <div className="bg-white border border-slate-200 rounded">
+                  {/* Barra fija: los botones y el desplazamiento horizontal permanecen
+                      a la vista aunque se baje por la lista de estudiantes. */}
+                  <div className="sticky top-0 z-20 bg-white rounded-t border-b border-slate-200">
+                    <div className="flex items-center justify-end gap-3 px-4 pt-2.5 flex-wrap">
+                      <button
+                        onClick={() => setShowImportarNotas(true)}
+                        disabled={!evaluacionActual}
+                        className="inline-flex items-center gap-1 text-xs text-slate-600 hover:underline disabled:text-slate-300 disabled:no-underline disabled:cursor-not-allowed"
+                      >
+                        <FileSpreadsheet className="h-3.5 w-3.5" /> Importar notas de 1 criterio
+                      </button>
+                      <button
+                        onClick={() => { setEvaluacionEditando(null); setShowEvalModal(true); }}
+                        className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:underline"
+                      >
+                        <Plus className="h-3.5 w-3.5" /> Nueva evaluación en {DIMENSIONES.find((d) => d.key === dimensionActiva)?.label}
+                      </button>
+                    </div>
+                    {/* Barra de desplazamiento horizontal superior, sincronizada con la tabla */}
+                    <div ref={barraSupRef} className="overflow-x-auto mt-1 px-4 pb-1.5" style={{ scrollbarWidth: "thin" }}>
+                      <div style={{ width: anchoBarraSup, height: 1 }} aria-hidden="true" />
+                    </div>
+                  </div>
+                  <div ref={tablaScrollRef} className="overflow-x-auto rounded-b">
                   <table className="text-sm border-collapse">
                     <thead>
+                      {/* Orden igual al del registro en papel: SER, SABER, HACER, TOTAL,
+                          Autoevaluación, Calificación trimestral. */}
+                      {/* Fila 1: el nombre de cada dimensión, a lo ancho de sus criterios + su columna "Prom." */}
+                      <tr className="text-xs">
+                        <th rowSpan={2} className="px-4 py-2 font-medium text-left sticky left-0 bg-white z-10 whitespace-nowrap align-bottom border-b border-slate-200">
+                          Estudiante
+                        </th>
+                        {DIMENSIONES_MAESTRO.map((d) => {
+                          const criterios = evaluacionesPorDimension[d.key] || [];
+                          return (
+                            <th
+                              key={d.key}
+                              colSpan={criterios.length + 1}
+                              className={`px-2 py-1.5 font-semibold text-center border-b border-l border-slate-200 ${COLOR_DIMENSION[d.key]}`}
+                            >
+                              {d.label} <span className="opacity-60 font-normal">/{d.max}</span>
+                            </th>
+                          );
+                        })}
+                        <th rowSpan={2} className="px-4 py-2 font-medium text-right align-bottom border-b border-l border-slate-200 whitespace-nowrap bg-slate-50">TOTAL /95</th>
+                        {DIMENSION_AUTOEVAL && (() => {
+                          const criterios = evaluacionesPorDimension[DIMENSION_AUTOEVAL.key] || [];
+                          return (
+                            <th
+                              colSpan={criterios.length + 1}
+                              className={`px-2 py-1.5 font-semibold text-center border-b border-l border-slate-200 ${COLOR_DIMENSION[DIMENSION_AUTOEVAL.key]}`}
+                            >
+                              {DIMENSION_AUTOEVAL.label} <span className="opacity-60 font-normal">/{DIMENSION_AUTOEVAL.max}</span>
+                            </th>
+                          );
+                        })()}
+                        <th rowSpan={2} className="px-4 py-2 font-medium text-right align-bottom border-b border-l border-slate-200 whitespace-nowrap bg-emerald-50">CALIF. TRIM. /100</th>
+                      </tr>
+                      {/* Fila 2: un encabezado por criterio (editable, como antes) + "Prom." al final de cada grupo */}
                       <tr className="border-b border-slate-200 text-xs text-slate-500">
-                        <th className="px-4 py-2 font-medium text-left sticky left-0 bg-white z-10 whitespace-nowrap">Estudiante</th>
-                        {evaluacionesDimension.map((e) => (
-                          <th
-                            key={e.id}
-                            onClick={() => setEvaluacionId(e.id)}
-                            title={e.title}
-                            className={`px-1.5 py-2 font-medium text-center align-bottom cursor-pointer select-none ${evaluacionId === e.id ? "bg-emerald-50" : ""}`}
-                            style={{ minWidth: 86, maxWidth: 110 }}
-                          >
-                            <div className="flex items-start justify-center gap-1">
-                              <span className="line-clamp-2 leading-tight text-[11px] normal-case font-normal text-slate-700">{e.title}</span>
-                              <button
-                                onClick={(ev) => { ev.stopPropagation(); setEvaluacionEditando(e); setShowEvalModal(true); }}
-                                className="text-slate-300 hover:text-slate-600 shrink-0"
-                                title="Editar criterio"
-                              >
-                                <Pencil className="h-3 w-3" />
-                              </button>
-                            </div>
-                            <p className="text-[10px] text-slate-400 font-normal mt-0.5">/{e.maximum_score}</p>
-                          </th>
-                        ))}
-                        <th className="px-4 py-2 font-medium text-right whitespace-nowrap">Promedio</th>
+                        {[...DIMENSIONES_MAESTRO, ...(DIMENSION_AUTOEVAL ? [DIMENSION_AUTOEVAL] : [])].map((d) => {
+                          const criterios = evaluacionesPorDimension[d.key] || [];
+                          return (
+                            <Fragment key={d.key}>
+                              {criterios.map((e) => (
+                                <th
+                                  key={e.id}
+                                  onClick={() => { setDimensionActiva(d.key); setEvaluacionId(e.id); }}
+                                  title={e.title}
+                                  className={`px-1.5 py-2 font-medium text-center align-bottom cursor-pointer select-none border-l border-slate-100 ${evaluacionId === e.id ? "bg-emerald-50" : ""}`}
+                                  style={{ minWidth: 86, maxWidth: 110 }}
+                                >
+                                  <div className="flex items-start justify-center gap-1">
+                                    <span className="leading-tight text-[11px] normal-case font-normal text-slate-700 whitespace-normal break-words">{tituloSinFecha(e.title)}</span>
+                                    <button
+                                      onClick={(ev) => { ev.stopPropagation(); setEvaluacionEditando(e); setShowEvalModal(true); }}
+                                      className="text-slate-300 hover:text-slate-600 shrink-0"
+                                      title="Editar criterio"
+                                    >
+                                      <Pencil className="h-3 w-3" />
+                                    </button>
+                                    <button
+                                      onClick={(ev) => { ev.stopPropagation(); setErrorEliminar(""); setCriterioAEliminar(e); }}
+                                      className="text-slate-300 hover:text-red-600 shrink-0"
+                                      title="Eliminar criterio"
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                    </button>
+                                  </div>
+                                  {e.evaluation_date && (
+                                    <p className="text-[10px] font-semibold text-slate-500 mt-0.5">{formatearFechaCorta(e.evaluation_date)}</p>
+                                  )}
+                                  <p className="text-[10px] text-slate-400 font-normal mt-0.5">/{e.maximum_score}</p>
+                                </th>
+                              ))}
+                              <th className="px-3 py-2 font-medium text-right whitespace-nowrap border-l border-slate-100 text-slate-500">Prom.</th>
+                            </Fragment>
+                          );
+                        })}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {students.map((s) => {
-                        const prom = promedioDimension(s.id, dimensionActiva);
+                        const resaltada = filaResaltada === s.id;
                         return (
-                          <tr key={s.id}>
-                            <td className="px-4 py-1.5 text-slate-800 whitespace-nowrap sticky left-0 bg-white z-10">{s.first_name} {s.last_name}</td>
-                            {evaluacionesDimension.map((e) => (
-                              <td key={e.id} className="px-1 py-1.5 text-center">
-                                <input
-                                  type="number" min="0" max={e.maximum_score}
-                                  value={valorCelda(e.id, s.id)}
-                                  onChange={(ev) => editarCelda(e.id, s.id, ev.target.value)}
-                                  className="w-16 rounded border border-slate-300 px-1 py-1 text-xs text-center"
-                                  placeholder="—"
-                                />
-                              </td>
-                            ))}
-                            <td className="px-4 py-1.5 text-right text-slate-700 font-medium whitespace-nowrap">{prom !== null ? prom.toFixed(1) : "—"}</td>
-                          </tr>
+                        <tr key={s.id} className={resaltada ? "bg-amber-200" : ""}>
+                          <td
+                            onClick={() => setFilaResaltada(resaltada ? null : s.id)}
+                            title="Clic para resaltar la fila"
+                            className={`px-4 py-1.5 text-slate-800 whitespace-nowrap sticky left-0 z-10 cursor-pointer hover:text-amber-800 ${resaltada ? "bg-amber-200 font-semibold" : "bg-white"}`}
+                          >{s.first_name} {s.last_name}</td>
+                          {DIMENSIONES_MAESTRO.map((d) => {
+                            const criterios = evaluacionesPorDimension[d.key] || [];
+                            const prom = promedioDimension(s.id, d.key);
+                            return (
+                              <Fragment key={d.key}>
+                                {criterios.map((e) => (
+                                  <td key={e.id} className="px-1 py-1.5 text-center border-l border-slate-50">
+                                    <input
+                                      type="number" min="0" max={e.maximum_score}
+                                      value={valorCelda(e.id, s.id)}
+                                      onChange={(ev) => editarCelda(e.id, s.id, ev.target.value)}
+                                      className="w-16 rounded border border-slate-300 px-1 py-1 text-xs text-center"
+                                      placeholder="—"
+                                    />
+                                  </td>
+                                ))}
+                                <td className="px-3 py-1.5 text-right text-slate-600 border-l border-slate-50 whitespace-nowrap">{prom !== null ? prom : "—"}</td>
+                              </Fragment>
+                            );
+                          })}
+                          <td className={`px-4 py-1.5 text-right text-slate-700 font-medium border-l border-slate-100 whitespace-nowrap ${resaltada ? "bg-amber-200" : "bg-slate-50"}`}>{totalMaestro(s.id)}</td>
+                          {DIMENSION_AUTOEVAL && (() => {
+                            const criterios = evaluacionesPorDimension[DIMENSION_AUTOEVAL.key] || [];
+                            const prom = promedioDimension(s.id, DIMENSION_AUTOEVAL.key);
+                            return (
+                              <Fragment key={DIMENSION_AUTOEVAL.key}>
+                                {criterios.map((e) => (
+                                  <td key={e.id} className="px-1 py-1.5 text-center border-l border-slate-50">
+                                    <input
+                                      type="number" min="0" max={e.maximum_score}
+                                      value={valorCelda(e.id, s.id)}
+                                      onChange={(ev) => editarCelda(e.id, s.id, ev.target.value)}
+                                      className="w-16 rounded border border-slate-300 px-1 py-1 text-xs text-center"
+                                      placeholder="—"
+                                    />
+                                  </td>
+                                ))}
+                                <td className="px-3 py-1.5 text-right text-slate-600 border-l border-slate-50 whitespace-nowrap">{prom !== null ? prom : "—"}</td>
+                              </Fragment>
+                            );
+                          })()}
+                          <td className={`px-4 py-1.5 text-right font-semibold text-slate-900 border-l border-slate-100 whitespace-nowrap ${resaltada ? "bg-amber-200" : "bg-emerald-50"}`}>{calificacionTrimestral(s.id)}</td>
+                        </tr>
                         );
                       })}
                       {students.length === 0 && (
-                        <tr><td colSpan={evaluacionesDimension.length + 2} className="p-6 text-sm text-slate-400 text-center">No hay estudiantes activos en este curso y paralelo.</td></tr>
+                        <tr>
+                          <td
+                            colSpan={1 + DIMENSIONES.reduce((acc, d) => acc + (evaluacionesPorDimension[d.key] || []).length + 1, 0) + 2}
+                            className="p-6 text-sm text-slate-400 text-center"
+                          >
+                            No hay estudiantes activos en este curso y paralelo.
+                          </td>
+                        </tr>
                       )}
                     </tbody>
                   </table>
+                  </div>
                 </div>
                 <div className="flex items-center justify-end gap-3">
                   {saved && <span className="text-xs text-emerald-700 flex items-center gap-1"><Check className="h-3.5 w-3.5" /> Notas guardadas</span>}
@@ -332,50 +543,9 @@ export default function Notas() {
               </>
             ) : (
               <div className="bg-white border border-slate-200 rounded p-8 text-center text-sm text-slate-400">
-                Crea una evaluación en esta dimensión para empezar a registrar notas.
+                Crea una evaluación para empezar a registrar notas.
               </div>
             )}
-          </div>
-
-          <div className="space-y-2">
-            <p className="text-xs text-slate-500">Registro de calificaciones</p>
-            <div className="bg-white border border-slate-200 rounded overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
-                    <th className="px-4 py-3 font-medium">Estudiante</th>
-                    <th className="px-4 py-3 font-medium text-right">SER /10</th>
-                    <th className="px-4 py-3 font-medium text-right">SABER /45</th>
-                    <th className="px-4 py-3 font-medium text-right">HACER /40</th>
-                    <th className="px-4 py-3 font-medium text-right">TOTAL /95</th>
-                    <th className="px-4 py-3 font-medium text-right">Autoeval. /5</th>
-                    <th className="px-4 py-3 font-medium text-right">Calif. trimestral /100</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {students.map((s) => {
-                    const ser = promedioDimension(s.id, "ser");
-                    const saber = promedioDimension(s.id, "saber");
-                    const hacer = promedioDimension(s.id, "hacer");
-                    const autoeval = promedioDimension(s.id, "autoevaluacion");
-                    return (
-                      <tr key={s.id}>
-                        <td className="px-4 py-3 text-slate-800 whitespace-nowrap">{s.first_name} {s.last_name}</td>
-                        <td className="px-4 py-3 text-right text-slate-600">{ser !== null ? ser.toFixed(1) : "—"}</td>
-                        <td className="px-4 py-3 text-right text-slate-600">{saber !== null ? saber.toFixed(1) : "—"}</td>
-                        <td className="px-4 py-3 text-right text-slate-600">{hacer !== null ? hacer.toFixed(1) : "—"}</td>
-                        <td className="px-4 py-3 text-right text-slate-700 font-medium">{totalMaestro(s.id).toFixed(1)}</td>
-                        <td className="px-4 py-3 text-right text-slate-600">{autoeval !== null ? autoeval.toFixed(1) : "—"}</td>
-                        <td className="px-4 py-3 text-right font-semibold text-slate-900">{calificacionTrimestral(s.id).toFixed(1)}</td>
-                      </tr>
-                    );
-                  })}
-                  {students.length === 0 && (
-                    <tr><td colSpan={7} className="p-6 text-sm text-slate-400 text-center">Sin estudiantes.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
           </div>
         </>
       )}
@@ -416,12 +586,51 @@ export default function Notas() {
           }}
         />
       )}
+      {popupGuardado && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-xs w-full p-6 text-center space-y-3">
+            <Check className="h-10 w-10 text-emerald-600 mx-auto" />
+            <p className="font-semibold text-lg text-slate-900">Notas guardadas</p>
+            <p className="text-sm text-slate-600">Las calificaciones se guardaron correctamente.</p>
+            <button
+              onClick={() => setPopupGuardado(false)}
+              className="text-sm bg-slate-900 text-white px-6 py-2 rounded hover:bg-slate-800"
+            >
+              Aceptar
+            </button>
+          </div>
+        </div>
+      )}
+      {criterioAEliminar && (
+        <Modal title="Eliminar criterio" onClose={() => setCriterioAEliminar(null)} maxWidth="sm:max-w-sm"
+          footer={
+            <>
+              <button onClick={() => setCriterioAEliminar(null)} className="text-sm text-slate-600 px-4 py-2">Cancelar</button>
+              <button
+                onClick={eliminarCriterio}
+                disabled={eliminandoCriterio}
+                className="text-sm bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 disabled:opacity-50"
+              >
+                {eliminandoCriterio ? "Eliminando…" : "Sí, eliminar"}
+              </button>
+            </>
+          }
+        >
+          <p className="text-sm text-slate-600">
+            ¿Deseas eliminar el criterio <b>"{tituloSinFecha(criterioAEliminar.title)}"</b>?
+          </p>
+          <p className="text-sm text-red-700">
+            Se eliminarán también sus {notasTodas.filter((n) => n.evaluation_id === criterioAEliminar.id).length} nota(s) registradas. Esta acción no se puede deshacer.
+          </p>
+          {errorEliminar && <p className="text-sm text-red-700">{errorEliminar}</p>}
+        </Modal>
+      )}
     </div>
   );
 }
 
 function EvaluacionModal({ tipos, evaluacion, dimensionPorDefecto, onClose, onSave }) {
-  const [titulo, setTitulo] = useState(evaluacion?.title || "");
+  const [titulo, setTitulo] = useState(tituloSinFecha(evaluacion?.title || ""));
   const [evaluationTypeId, setEvaluationTypeId] = useState(evaluacion?.evaluation_type_id || tipos[0]?.id || "");
   const [fecha, setFecha] = useState(evaluacion?.evaluation_date || new Date().toISOString().slice(0, 10));
   const [puntajeMax, setPuntajeMax] = useState(evaluacion?.maximum_score ?? 10);
@@ -449,7 +658,17 @@ function EvaluacionModal({ tipos, evaluacion, dimensionPorDefecto, onClose, onSa
           {DIMENSIONES.map((d) => <option key={d.key} value={d.key}>{d.label} (/{d.max})</option>)}
         </select>
       </div>
-      <Field label="Título" value={titulo} onChange={setTitulo} placeholder="Ej. Prueba del segundo bimestre" required />
+      <div>
+        <label className="block text-xs font-medium text-slate-600 mb-1.5">Título</label>
+        <textarea
+          value={titulo}
+          onChange={(e) => setTitulo(e.target.value)}
+          placeholder="Ej. Prueba del segundo bimestre"
+          required
+          rows={3}
+          className="w-full rounded border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600 resize-y"
+        />
+      </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1.5">Tipo</label>
@@ -527,7 +746,7 @@ function ImportarNotasModal({ evaluacion, students, onClose, onImported }) {
 
   return (
     <Modal
-      title={`Importar notas — ${evaluacion.title}`}
+      title={`Importar notas — ${tituloSinFecha(evaluacion.title)}`}
       onClose={onClose}
       maxWidth="sm:max-w-2xl"
       footer={
@@ -548,7 +767,7 @@ function ImportarNotasModal({ evaluacion, students, onClose, onImported }) {
         alumnos que pertenezcan a este curso y paralelo.
       </p>
       <button
-        onClick={() => generarPlantillaNotas(students, evaluacion.title)}
+        onClick={() => generarPlantillaNotas(students, tituloSinFecha(evaluacion.title))}
         className="inline-flex items-center gap-2 text-xs text-emerald-700 hover:underline"
       >
         <Download className="h-3.5 w-3.5" /> Descargar plantilla con los alumnos de este curso/paralelo
@@ -611,6 +830,62 @@ function ImportarNotasModal({ evaluacion, students, onClose, onImported }) {
   );
 }
 
+// Compara títulos de evaluaciones ignorando un prefijo de fecha (D/M/AAAA),
+// para que no se dupliquen criterios al reimportar.
+function mismoTitulo(a, b) {
+  return tituloSinFecha(a).trim().toLowerCase() === tituloSinFecha(b).trim().toLowerCase();
+}
+
+// Formatea una fecha ISO (AAAA-MM-DD) como D/M/AAAA para mostrarla en pantalla.
+function formatearFechaCorta(iso) {
+  if (!iso) return "";
+  const partes = String(iso).slice(0, 10).split("-");
+  if (partes.length !== 3) return "";
+  return `${Number(partes[2])}/${Number(partes[1])}/${partes[0]}`;
+}
+
+// Ordena evaluaciones de la fecha más antigua a la más reciente (las sin fecha al final).
+function ordenPorFecha(a, b) {
+  const fa = a.evaluation_date || "";
+  const fb = b.evaluation_date || "";
+  if (fa !== fb) {
+    if (!fa) return 1;
+    if (!fb) return -1;
+    return fa < fb ? -1 : 1;
+  }
+  const ca = a.created_at || "";
+  const cb = b.created_at || "";
+  return ca < cb ? -1 : ca > cb ? 1 : 0;
+}
+
+// Clasifica el género del alumno ("M"/"F") tolerando las distintas formas
+// en que puede venir cargado: "M"/"F", "Masculino"/"Femenino", "Varón"/"Mujer".
+function clasificarGenero(valor) {
+  const g = String(valor ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/\s+/g, " ").trim();
+  if (["M", "MASCULINO", "VARON", "HOMBRE"].includes(g)) return "M";
+  if (["F", "FEMENINO", "MUJER"].includes(g)) return "F";
+  return null;
+}
+
+// Traduce errores técnicos a mensajes claros en español para la importación de notas.
+function mensajeErrorImportacion(err) {
+
+  const msg = err?.message || "";
+  if (msg.includes("ON CONFLICT DO UPDATE command cannot affect row a second time")) {
+    return "El archivo tiene dos o más columnas con el mismo nombre. Revisa los títulos de los criterios en el Excel, deja un solo nombre por columna y vuelve a intentarlo.";
+  }
+  if (msg.includes("duplicate key value")) {
+    return "Algunos datos ya existen con la misma identificación. Si deseas reemplazarlos, confirma la importación cuando el sistema te lo pregunte.";
+  }
+  if (msg.includes("violates foreign key constraint")) {
+    return "Hay alumnos o evaluaciones que ya no existen en el sistema. Recarga la página y vuelve a intentarlo.";
+  }
+  if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || /network/i.test(msg)) {
+    return "Se perdió la conexión con el servidor. Revisa tu conexión a internet e inténtalo de nuevo.";
+  }
+  return `No se pudo completar la importación: ${msg || "error desconocido"}.`;
+}
+
 function ImportarPlanillaModal({ subjectId, courseId, parallelId, students, evaluaciones, onClose, onImported }) {
   const { user } = useAuth();
   const [fileName, setFileName] = useState("");
@@ -622,6 +897,7 @@ function ImportarPlanillaModal({ subjectId, courseId, parallelId, students, eval
   const [importando, setImportando] = useState(false);
   const [resumen, setResumen] = useState(null);
   const [coincidenciasManuales, setCoincidenciasManuales] = useState({}); // { indiceFila: studentId }
+  const [avisoReemplazo, setAvisoReemplazo] = useState(null); // { cantidad } cuando ya existen notas
   const inputRef = useRef(null);
 
   const handleFile = async (e) => {
@@ -674,38 +950,88 @@ function ImportarPlanillaModal({ subjectId, courseId, parallelId, students, eval
     : 0;
   const criteriosNuevos = (dim) => {
     if (!resultado) return 0;
-    const existentes = new Set(
-      evaluaciones.filter((e) => (e.dimension || "hacer") === dim).map((e) => e.title.trim().toLowerCase())
-    );
-    return resultado.criterios[dim].filter((c) => !existentes.has(c.titulo.trim().toLowerCase())).length;
+    return resultado.criterios[dim].filter((c) => !evaluaciones.some(
+      (e) => (e.dimension || "hacer") === dim && mismoTitulo(e.title, c.titulo)
+    )).length;
   };
 
   const encontrados = alumnosCruzados.filter((a) => a.alumnoDB).length;
   const noEncontrados = alumnosCruzados.length - encontrados;
 
-  const confirmar = async () => {
+  const confirmar = async (forzarReemplazo = false) => {
     if (!resultado) return;
     setImportando(true);
     setError("");
     try {
+      // Se trabaja sobre una copia local para no mutar las props durante el proceso.
+      const evaluacionesTodas = [...evaluaciones];
+
+      // Paso 0: detectar si ya existen notas para las evaluaciones que se van a reutilizar.
+      // Si las hay, se pregunta al usuario si desea reemplazar la información anterior.
+      const idsReutilizados = [];
+      for (const dim of ["ser", "saber", "hacer"]) {
+        for (const criterio of resultado.criterios[dim]) {
+          const existente = evaluacionesTodas.find(
+            (e) => (e.dimension || "hacer") === dim && mismoTitulo(e.title, criterio.titulo)
+          );
+          if (existente) idsReutilizados.push(existente.id);
+        }
+      }
+      const autoExistente = evaluacionesTodas.find((e) => (e.dimension || "hacer") === "autoevaluacion");
+      if (autoExistente && alumnosCruzados.some((a) => a.valores.autoeval !== null)) {
+        idsReutilizados.push(autoExistente.id);
+      }
+
+      if (!forzarReemplazo && idsReutilizados.length > 0) {
+        const { count, error: errCount } = await supabase
+          .from("grades")
+          .select("id", { count: "exact", head: true })
+          .in("evaluation_id", idsReutilizados);
+        if (errCount) throw errCount;
+        if ((count || 0) > 0) {
+          setImportando(false);
+          setAvisoReemplazo({ cantidad: count });
+          return;
+        }
+      }
+
+      // Paso 0b: si el usuario confirmó el reemplazo, primero se eliminan las notas
+      // existentes de los alumnos que se van a importar, para evitar duplicados.
+      if (forzarReemplazo && idsReutilizados.length > 0) {
+        const idsEstudiantes = alumnosCruzados.filter((a) => a.alumnoDB).map((a) => a.alumnoDB.id);
+        if (idsEstudiantes.length > 0) {
+          const { error: errDel } = await supabase
+            .from("grades")
+            .delete()
+            .in("evaluation_id", idsReutilizados)
+            .in("student_id", idsEstudiantes);
+          if (errDel) throw errDel;
+        }
+      }
+
       // Paso 1: crear o reutilizar las evaluaciones de cada criterio detectado
       const idsPorDimension = { ser: [], saber: [], hacer: [] };
       for (const dim of ["ser", "saber", "hacer"]) {
         for (const criterio of resultado.criterios[dim]) {
-          const existente = evaluaciones.find(
-            (e) => (e.dimension || "hacer") === dim && e.title.trim().toLowerCase() === criterio.titulo.trim().toLowerCase()
+          const existente = evaluacionesTodas.find(
+            (e) => (e.dimension || "hacer") === dim && mismoTitulo(e.title, criterio.titulo)
           );
           if (existente) {
             idsPorDimension[dim].push(existente.id);
+            // La fecha del Excel se guarda por separado en la base de datos.
+            if (criterio.fecha && existente.evaluation_date !== criterio.fecha) {
+              await supabase.from("evaluations").update({ evaluation_date: criterio.fecha }).eq("id", existente.id);
+              existente.evaluation_date = criterio.fecha;
+            }
           } else {
             const { data, error: errIns } = await supabase.from("evaluations").insert({
               subject_id: subjectId, teacher_id: user.id, course_id: courseId, parallel_id: parallelId,
-              dimension: dim, title: criterio.titulo, evaluation_date: new Date().toISOString().slice(0, 10),
+              dimension: dim, title: criterio.titulo, evaluation_date: criterio.fecha || new Date().toISOString().slice(0, 10),
               maximum_score: DIMENSION_MAX[dim],
             }).select().single();
             if (errIns) throw errIns;
             idsPorDimension[dim].push(data.id);
-            evaluaciones.push(data); // para que futuras vueltas del loop lo detecten como existente
+            evaluacionesTodas.push(data); // para que futuras vueltas del loop lo detecten como existente
           }
         }
       }
@@ -714,7 +1040,7 @@ function ImportarPlanillaModal({ subjectId, courseId, parallelId, students, eval
       const hayAutoeval = alumnosCruzados.some((a) => a.valores.autoeval !== null);
       let autoevalId = null;
       if (hayAutoeval) {
-        const existente = evaluaciones.find((e) => (e.dimension || "hacer") === "autoevaluacion");
+        const existente = evaluacionesTodas.find((e) => (e.dimension || "hacer") === "autoevaluacion");
         if (existente) {
           autoevalId = existente.id;
         } else {
@@ -755,21 +1081,35 @@ function ImportarPlanillaModal({ subjectId, courseId, parallelId, students, eval
         }
       }
 
-      if (registros.length > 0) {
-        const { error: errUp } = await supabase.from("grades").upsert(registros, { onConflict: "evaluation_id,student_id" });
+      // Paso 4: eliminar duplicados por (evaluation_id, student_id). Si el Excel trae dos
+      // columnas con el mismo título, se conserva el último valor y se evita el error
+      // "ON CONFLICT DO UPDATE command cannot affect row a second time".
+      const vistos = new Map();
+      let duplicados = 0;
+      for (const r of registros) {
+        const clave = `${r.evaluation_id}:${r.student_id}`;
+        if (vistos.has(clave)) duplicados++;
+        vistos.set(clave, r);
+      }
+      const registrosUnicos = [...vistos.values()];
+
+      if (registrosUnicos.length > 0) {
+        const { error: errUp } = await supabase.from("grades").upsert(registrosUnicos, { onConflict: "evaluation_id,student_id" });
         if (errUp) throw errUp;
       }
 
-      setResumen({ criterios: totalCriterios, notas: registros.length, alumnos: encontrados });
+      setResumen({ criterios: totalCriterios, notas: registrosUnicos.length, alumnos: encontrados, duplicados, reemplazo: forzarReemplazo });
+      setAvisoReemplazo(null);
       setImportando(false);
       await onImported();
     } catch (err) {
       setImportando(false);
-      setError(err.message || "Ocurrió un error al importar.");
+      setError(mensajeErrorImportacion(err));
     }
   };
 
   return (
+    <>
     <Modal
       title="Importar planilla completa"
       onClose={onClose}
@@ -908,15 +1248,62 @@ function ImportarPlanillaModal({ subjectId, courseId, parallelId, students, eval
         </>
       )}
 
-      {resumen && (
-        <div className="text-center py-6 space-y-2">
-          <Check className="h-8 w-8 text-emerald-600 mx-auto" />
-          <p className="text-sm text-slate-700">
-            Se crearon/actualizaron <b>{resumen.criterios}</b> criterios y se guardaron <b>{resumen.notas}</b> notas
-            para <b>{resumen.alumnos}</b> alumnos.
-          </p>
-        </div>
-      )}
     </Modal>
+    {resumen && (
+      <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-6 text-center space-y-3">
+          <Check className="h-10 w-10 text-emerald-600 mx-auto" />
+          <p className="font-semibold text-lg text-slate-900">Datos importados</p>
+          <p className="text-sm text-slate-600">
+            Se {resumen.reemplazo ? "reemplazaron" : "guardaron"} <b>{resumen.notas}</b> notas de <b>{resumen.criterios}</b> criterios
+            para <b>{resumen.alumnos}</b> alumnos.
+            {resumen.reemplazo && (
+              <span className="block text-xs text-amber-700 mt-2">La información anterior fue reemplazada por los datos del archivo.</span>
+            )}
+            {resumen.duplicados > 0 && (
+              <span className="block text-xs text-slate-500 mt-1">
+                Se consolidaron {resumen.duplicados} valores duplicados del archivo (columnas con el mismo nombre).
+              </span>
+            )}
+          </p>
+          <button
+            onClick={() => { setResumen(null); onClose(); }}
+            className="text-sm bg-slate-900 text-white px-6 py-2 rounded hover:bg-slate-800"
+          >
+            Aceptar
+          </button>
+        </div>
+      </div>
+    )}
+    {avisoReemplazo && (
+      <div className="fixed inset-0 z-40 bg-slate-900/50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-5">
+          <div className="flex items-center gap-2 text-amber-700 mb-2">
+            <AlertTriangle className="h-5 w-5 shrink-0" />
+            <p className="font-semibold text-sm">Ya existen notas registradas</p>
+          </div>
+          <p className="text-sm text-slate-600 mb-4">
+            Se encontraron <b>{avisoReemplazo.cantidad}</b> notas guardadas para estas evaluaciones.
+            ¿Deseas <b>reemplazar</b> la información anterior con los datos del archivo Excel?
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => setAvisoReemplazo(null)}
+              className="text-sm text-slate-600 px-4 py-2 rounded border border-slate-300 hover:bg-slate-50"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={() => confirmar(true)}
+              disabled={importando}
+              className="text-sm bg-amber-600 text-white px-4 py-2 rounded hover:bg-amber-700 disabled:opacity-50"
+            >
+              {importando ? "Reemplazando…" : "Sí, reemplazar"}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }

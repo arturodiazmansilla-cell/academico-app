@@ -48,7 +48,8 @@ export default function App() {
         <Route path="/notas" element={<Notas />} />
         <Route path="/citaciones" element={<Citaciones />} />
         <Route path="/riesgo" element={<Riesgo />} />
-        <Route path="/reportes" element={<Reportes />} />
+        <Route path="/reportes" element={<Navigate to="/reportes/examen" replace />} />
+        <Route path="/reportes/:tipo" element={<Reportes />} />
         <Route path="/cursos" element={<CursosRoute />} />
         <Route path="/materias" element={<Materias />} />
         <Route
@@ -74,3 +75,8 @@ export default function App() {
     </Routes>
   );
 }
+/* ============================================================
+   Modal "olvidé mi contraseña" — agregar al final de tu hoja
+   de estilos global, junto a las reglas de .auth-card, etc.
+   ============================================================ */
+

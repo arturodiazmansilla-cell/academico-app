@@ -274,12 +274,18 @@ export default function Alumnos() {
         </div>
 
         {cursoFiltro && conteoGenero.total > 0 && (
-          <div className="flex items-center gap-3 text-sm text-slate-600 sm:pb-2">
-            <span><b className="text-slate-900">{conteoGenero.total}</b> alumno{conteoGenero.total !== 1 ? "s" : ""}</span>
-            <span className="text-slate-300">·</span>
-            <span><b className="text-slate-900">{conteoGenero.hombres}</b> hombres</span>
-            <span className="text-slate-300">·</span>
-            <span><b className="text-slate-900">{conteoGenero.mujeres}</b> mujeres</span>
+          <div className="flex items-center gap-3 text-lg sm:pb-2">
+            <span className="text-slate-100">
+              <b className="text-xl text-white">{conteoGenero.total}</b> alumno{conteoGenero.total !== 1 ? "s" : ""}
+            </span>
+            <span className="text-slate-500">·</span>
+            <span className="text-slate-100">
+              <b className="text-xl text-white">{conteoGenero.hombres}</b> hombres
+            </span>
+            <span className="text-slate-500">·</span>
+            <span className="text-slate-100">
+              <b className="text-xl text-white">{conteoGenero.mujeres}</b> mujeres
+            </span>
           </div>
         )}
       </div>

@@ -1,5 +1,7 @@
 // Reporte de Calificación (registro de calificaciones por curso, paralelo, materia y trimestre).
-// Salidas: PDF o Excel, tamaño Carta u Oficio, siempre en horizontal.
+// Salidas: PDF o Excel, tamaño Carta u Oficio, en horizontal (por defecto) o vertical.
+// Opción "ajustar a una sola hoja": el PDF fuerza todos los alumnos en una sola página
+// (reduce letra y alto de fila); el Excel deja el área de impresión en una sola hoja.
 // Requiere:  npm install jspdf exceljs
 //
 // `datos` tiene esta forma (lo arma Notas.tsx con los mismos cálculos de la pantalla):
@@ -12,10 +14,19 @@
 export const NOMBRE_ARCHIVO = "Reporte de Calificación";
 
 // Oficio (Bolivia): 216 x 330 mm. En Excel el tamaño más cercano es Legal (paperSize 5).
+// ancho/alto quedan en horizontal (ancho = el lado más largo); dimensionesPagina() los
+// intercambia cuando se pide orientación vertical.
 export const PAPELES = {
   carta: { nombre: "Carta", ancho: 279.4, alto: 215.9, excel: 1 },
   oficio: { nombre: "Oficio", ancho: 330, alto: 216, excel: 5 },
 };
+
+// Ancho y alto reales de la hoja según el tamaño de papel y la orientación elegidos.
+export function dimensionesPagina(papel, orientacion = "horizontal") {
+  const p = PAPELES[papel];
+  if (!p) throw new Error("Tamaño de papel no válido");
+  return orientacion === "vertical" ? { ancho: p.alto, alto: p.ancho } : { ancho: p.ancho, alto: p.alto };
+}
 
 const MM = 0.3528; // 1 punto tipográfico en milímetros
 const MARGEN = 8;
@@ -166,7 +177,7 @@ function cajaInfo(doc, x, y, w, h, etiqueta, valor) {
   doc.text(recortar(doc, valor || "", w - ancho - 6), x + 1.5 + ancho + 2.5, base);
 }
 
-function dibujarEncabezado(doc, datos, tabla, x0, ancho, logo) {
+function dibujarEncabezado(doc, datos, tabla, x0, ancho, logo, alturaEncabezado = ALTO_ENC) {
   const pw = doc.internal.pageSize.getWidth();
 
   // Bloque superior: logo, título e información del curso.
@@ -196,7 +207,7 @@ function dibujarEncabezado(doc, datos, tabla, x0, ancho, logo) {
 
   // Encabezado de la tabla.
   const y0 = Y_TABLA;
-  const h1 = 6, h2 = 5, h3 = ALTO_ENC - 11;
+  const h1 = 6, h2 = 5, h3 = alturaEncabezado - 11;
   const H = h1 + h2 + h3;
   const { cols } = tabla;
 
@@ -287,7 +298,8 @@ function dibujarFilas(doc, datos, tabla, x0, yInicio, filas, desde, hFila, pt) {
 
 // Dibuja todo el reporte sobre un documento jsPDF (o compatible). Se separa de la descarga
 // para poder probarlo sin navegador.
-export function dibujarReportePDF(doc, datos, logo = null) {
+export function dibujarReportePDF(doc, datos, logo = null, opciones = {}) {
+  const unaHoja = !!opciones.unaHoja;
   const pw = doc.internal.pageSize.getWidth();
   const ph = doc.internal.pageSize.getHeight();
   const anchoUtil = pw - MARGEN * 2;
@@ -300,13 +312,24 @@ export function dibujarReportePDF(doc, datos, logo = null) {
   const filas = datos.filas || [];
   const RESERVA_PIE = 16;
 
+  // Con muchos alumnos, el encabezado (títulos de actividades en vertical) deja poco lugar
+  // para las filas si se fuerza todo a una sola hoja. Se lo reduce hasta un mínimo legible
+  // para darle más espacio al cuerpo; con pocos alumnos no hace falta y queda como siempre.
+  const alturaEncabezado = unaHoja ? Math.max(34, ALTO_ENC - Math.min(24, filas.length * 0.35)) : ALTO_ENC;
+
   // Se mide el encabezado una vez para saber cuánto alto queda para las filas.
-  const yCuerpo = Y_TABLA + ALTO_ENC;
+  const yCuerpo = Y_TABLA + alturaEncabezado;
   const altoDisp = ph - MARGEN - RESERVA_PIE - yCuerpo;
 
   let porPagina;
   let hFila;
-  if (filas.length * 3.9 <= altoDisp) {
+  if (unaHoja) {
+    // Todos los alumnos van en una sola página, sin importar cuántos sean: se reduce
+    // el alto de fila lo que haga falta (el texto se sigue achicando solo dentro de
+    // textoCentro hasta un mínimo legible de 4.5pt).
+    porPagina = Math.max(filas.length, 1);
+    hFila = Math.max(1.8, altoDisp / porPagina);
+  } else if (filas.length * 3.9 <= altoDisp) {
     porPagina = Math.max(filas.length, 1);
     hFila = Math.min(6.2, altoDisp / porPagina);
   } else {
@@ -315,12 +338,14 @@ export function dibujarReportePDF(doc, datos, logo = null) {
     porPagina = Math.ceil(filas.length / paginas);
     hFila = Math.min(6.2, altoDisp / porPagina);
   }
-  const pt = hFila >= 5.6 ? 8 : hFila >= 4.6 ? 7.5 : 6.8;
+  const pt = unaHoja
+    ? Math.max(3.2, Math.min(8, hFila * 1.2))
+    : hFila >= 5.6 ? 8 : hFila >= 4.6 ? 7.5 : 6.8;
 
-  const totalPaginas = Math.max(1, Math.ceil(filas.length / porPagina));
+  const totalPaginas = unaHoja ? 1 : Math.max(1, Math.ceil(filas.length / porPagina));
   for (let p = 0; p < totalPaginas; p++) {
     if (p > 0) doc.addPage();
-    const yFilas = dibujarEncabezado(doc, datos, tabla, x0, tabla.total, logo);
+    const yFilas = dibujarEncabezado(doc, datos, tabla, x0, tabla.total, logo, alturaEncabezado);
     const desde = p * porPagina;
     dibujarFilas(doc, datos, tabla, x0, yFilas, filas.slice(desde, desde + porPagina), desde, hFila, pt);
   }
@@ -363,7 +388,7 @@ const borde = {
   right: { style: "thin", color: { argb: "FF555555" } },
 };
 
-export async function construirExcel(ExcelJS, datos, papel, logo = null) {
+export async function construirExcel(ExcelJS, datos, papel, logo = null, unaHoja = false, orientacion = "horizontal") {
   const wb = new ExcelJS.Workbook();
   wb.creator = datos.maestro || "Sistema Académico";
   const ws = wb.addWorksheet("Calificaciones");
@@ -516,10 +541,12 @@ export async function construirExcel(ExcelJS, datos, papel, logo = null) {
   // Impresión: horizontal, tamaño elegido, todo el ancho en una hoja y encabezado repetido.
   Object.assign(ws.pageSetup, {
     paperSize: papel.excel,
-    orientation: "landscape",
+    orientation: orientacion === "vertical" ? "portrait" : "landscape",
     fitToPage: true,
     fitToWidth: 1,
-    fitToHeight: 0,
+    // fitToHeight: 0 deja tantas páginas de alto como haga falta (como hasta ahora);
+    // fitToHeight: 1 fuerza a Excel a achicar todo para que quepa en una sola hoja al imprimir.
+    fitToHeight: unaHoja ? 1 : 0,
     horizontalCentered: true,
     margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.6, header: 0.2, footer: 0.25 },
     printTitlesRow: `${FILA_TITULO}:${FILA_ENC_FIN}`,
@@ -569,24 +596,38 @@ export async function prepararLogo(logoUrl) {
   }
 }
 
-// formato: "pdf" | "xls"      papel: "carta" | "oficio"
-export async function descargarReporte(formato, papel, datos, logoUrl = null) {
-  const p = PAPELES[papel];
-  if (!p) throw new Error("Tamaño de papel no válido");
-  const logo = await prepararLogo(logoUrl);
+// Arma el PDF (jsPDF) sin descargarlo, para poder mostrar antes una vista previa
+// (vistaPreviaPdf.ts) y recién ahí guardarlo con doc.save(), igual que reportePdfTabla.ts.
+// papel: "carta" | "oficio". Siempre en horizontal.
+export async function crearPdfCalificacion(papel, datos, logoUrl = null, opciones = {}) {
+  const orientacion = opciones.orientacion === "vertical" ? "vertical" : "horizontal";
+  const dim = dimensionesPagina(papel, orientacion);
+  const [{ jsPDF }, logo] = await Promise.all([import("jspdf"), prepararLogo(logoUrl)]);
+  const doc = new jsPDF({
+    orientation: orientacion === "vertical" ? "portrait" : "landscape",
+    unit: "mm",
+    format: [dim.ancho, dim.alto],
+  });
+  doc.setProperties({ title: NOMBRE_ARCHIVO });
+  dibujarReportePDF(doc, datos, logo, opciones);
+  return doc;
+}
 
+// formato: "pdf" | "xls"      papel: "carta" | "oficio"
+// opciones: { unaHoja?: boolean, orientacion?: "horizontal" | "vertical" }
+export async function descargarReporte(formato, papel, datos, logoUrl = null, opciones = {}) {
   if (formato === "pdf") {
-    const { jsPDF } = await import("jspdf");
-    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: [p.ancho, p.alto] });
-    doc.setProperties({ title: NOMBRE_ARCHIVO });
-    dibujarReportePDF(doc, datos, logo);
+    const doc = await crearPdfCalificacion(papel, datos, logoUrl, opciones);
     doc.save(`${NOMBRE_ARCHIVO}.pdf`);
     return;
   }
 
+  const p = PAPELES[papel];
+  if (!p) throw new Error("Tamaño de papel no válido");
+  const logo = await prepararLogo(logoUrl);
   const modulo = await import("exceljs");
   const ExcelJS = modulo.default || modulo;
-  const wb = await construirExcel(ExcelJS, datos, p, logo);
+  const wb = await construirExcel(ExcelJS, datos, p, logo, !!opciones.unaHoja, opciones.orientacion === "vertical" ? "vertical" : "horizontal");
   const buffer = await wb.xlsx.writeBuffer();
   descargar(
     new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),

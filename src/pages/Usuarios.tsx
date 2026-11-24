@@ -141,21 +141,30 @@ export default function Usuarios() {
       return;
     }
 
-    const respuesta = await fetch("/.netlify/functions/resetear-clave", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ user_id: resetUser.id, new_password: nuevaClave }),
-    });
+    try {
+      const respuesta = await fetch("/.netlify/functions/resetear-clave", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ user_id: resetUser.id, new_password: nuevaClave }),
+      });
 
-    const resultado = await respuesta.json();
-    setReseteando(false);
+      const resultado = await respuesta.json().catch(() => ({}));
+      setReseteando(false);
 
-    if (!respuesta.ok) {
-      setMensajeReset({ tipo: "error", texto: resultado.error ?? "No se pudo cambiar la contraseña." });
-      return;
+      if (!respuesta.ok) {
+        setMensajeReset({ tipo: "error", texto: resultado.error ?? "No se pudo cambiar la contraseña." });
+        return;
+      }
+
+      setResetUser(null);
+      cargar();
+    } catch (err) {
+      setReseteando(false);
+      setMensajeReset({
+        tipo: "error",
+        texto: "No se pudo contactar al servidor. En local usa 'netlify dev' en vez de 'npm run dev'.",
+      });
     }
-
-    setResetUser(null);
   };
 
   return (

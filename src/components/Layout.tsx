@@ -1,7 +1,9 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
 import {
   GraduationCap, LayoutDashboard, Users, ClipboardCheck, Mail,
   FileWarning, NotebookPen, ShieldAlert, Settings, UserCog, BookOpen, Library, LogOut, ClipboardList,
+  ClipboardX, TrendingDown, FileText, ChevronDown,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useSettings } from "../context/SettingsContext";
@@ -14,7 +16,17 @@ const NAV = [
   { to: "/notas", label: "Notas", icon: NotebookPen },
   { to: "/citaciones", label: "Citaciones", icon: Mail },
   { to: "/riesgo", label: "Riesgo", icon: ShieldAlert },
-  { to: "/reportes", label: "Reportes", icon: ClipboardList },
+  {
+    key: "reportes",
+    label: "Reportes",
+    icon: ClipboardList,
+    children: [
+      { to: "/reportes/examen", label: "Alumnos que deben examen", icon: ClipboardX },
+      { to: "/reportes/bajo-rendimiento", label: "Alumnos con bajo rendimiento", icon: TrendingDown },
+      { to: "/reportes/calificacion", label: "Reporte de Calificación", icon: FileText },
+      { to: "/reportes/profesores", label: "Reporte de Profesores", icon: Users },
+    ],
+  },
   { to: "/cursos", label: "Cursos", icon: BookOpen, adminOnly: true, permissionKey: "canManageCourses" },
   { to: "/materias", label: "Materias", icon: Library },
   { to: "/usuarios", label: "Usuarios", icon: UserCog, adminOnly: true },
@@ -46,6 +58,15 @@ export default function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
   const items = NAV.filter((n) => !n.adminOnly || isAdmin || (n.permissionKey && permissions[n.permissionKey]));
+  // Para el título de arriba: "aplana" los hijos de Reportes junto al resto de los ítems.
+  const itemsPlanos = items.flatMap((i) => (i.children ? i.children : [i]));
+
+  // El submenú de Reportes se abre solo al entrar a una de sus páginas, y el usuario
+  // puede volver a colapsarlo sin que se cierre solo mientras sigue navegando ahí.
+  const [reportesAbierto, setReportesAbierto] = useState(() => location.pathname.startsWith("/reportes"));
+  useEffect(() => {
+    if (location.pathname.startsWith("/reportes")) setReportesAbierto(true);
+  }, [location.pathname]);
 
   const handleLogout = async () => {
     await signOut();
@@ -64,6 +85,47 @@ export default function Layout() {
         </div>
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
           {items.map((item) => {
+            if (item.children) {
+              const Icon = item.icon;
+              const grupoActivo = location.pathname.startsWith("/reportes");
+              return (
+                <div key={item.key}>
+                  <button
+                    type="button"
+                    onClick={() => setReportesAbierto((v) => !v)}
+                    aria-expanded={reportesAbierto}
+                    className={`w-full flex items-center gap-3 rounded px-3 py-2.5 text-sm transition-colors border-l-2 ${
+                      grupoActivo ? "text-white border-emerald-500" : "text-slate-300 hover:bg-white/5 hover:text-white border-transparent"
+                    }`}
+                  >
+                    <Icon className="h-4 w-4" />
+                    <span className="flex-1 text-left">{item.label}</span>
+                    <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform ${reportesAbierto ? "rotate-180" : ""}`} />
+                  </button>
+                  {reportesAbierto && (
+                    <div className="mt-1 ml-6 space-y-0.5 border-l border-white/10 pl-3">
+                      {item.children.map((sub) => {
+                        const SubIcon = sub.icon;
+                        return (
+                          <NavLink
+                            key={sub.to}
+                            to={sub.to}
+                            className={({ isActive }) =>
+                              `flex items-center gap-2 rounded px-2.5 py-2 text-[13px] transition-colors ${
+                                isActive ? "bg-white/10 text-white" : "text-slate-400 hover:bg-white/5 hover:text-white"
+                              }`
+                            }
+                          >
+                            <SubIcon className="h-3.5 w-3.5 shrink-0" />
+                            <span className="truncate">{sub.label}</span>
+                          </NavLink>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            }
             const Icon = item.icon;
             return (
               <NavLink
@@ -91,7 +153,7 @@ export default function Layout() {
           <div className="md:hidden"><Logo /></div>
           <div className="hidden md:block">
             <h1 className="font-ledger text-xl font-semibold text-slate-900">
-              {items.find((i) => location.pathname === i.to)?.label || "Sistema académico"}
+              {itemsPlanos.find((i) => location.pathname === i.to)?.label || "Sistema académico"}
             </h1>
           </div>
           <div className="flex items-center gap-3">
@@ -127,6 +189,21 @@ export default function Layout() {
       >
         {items.map((item) => {
           const Icon = item.icon;
+          // En el menú inferior no hay espacio para un submenú desplegable: "Reportes" va
+          // directo al primer reporte, y queda resaltado mientras estés en cualquiera de los 4.
+          if (item.children) {
+            const activo = location.pathname.startsWith("/reportes");
+            return (
+              <NavLink
+                key={item.key}
+                to={item.children[0].to}
+                className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded text-[11px] shrink-0 ${activo ? "text-emerald-400" : "text-slate-400"}`}
+              >
+                <Icon className="h-5 w-5" />
+                {item.label}
+              </NavLink>
+            );
+          }
           return (
             <NavLink
               key={item.to}

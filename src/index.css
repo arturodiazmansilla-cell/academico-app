@@ -15,3 +15,59 @@ html, body, #root {
 body {
   color: var(--app-font-color);
 }
+/* ============================================================
+   Modal "olvidé mi contraseña" — agregar al final de tu hoja
+   de estilos global, junto a las reglas de .auth-card, etc.
+   ============================================================ */
+
+.auth-link-button {
+  background: none;
+  border: none;
+  color: var(--color-primary);
+  padding: 0;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.auth-link-button:hover {
+  background: none;
+  text-decoration: underline;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--color-surface);
+  padding: 2rem;
+  border-radius: 6px;
+}
+
+.modal-card h2 {
+  margin-top: 0;
+}
+
+.modal-card form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.modal-success {
+  color: var(--color-success-text);
+  background: var(--color-success-bg);
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  margin: 0;
+  font-size: 0.9rem;
+}

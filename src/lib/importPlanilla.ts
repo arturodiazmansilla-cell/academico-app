@@ -13,6 +13,24 @@ export function normalizarNombre(texto) {
     .trim();
 }
 
+// Quita un prefijo de fecha (D/M/AAAA) del inicio del título, si existe.
+// Ej: "6/10/2026\nReconocemos la validación" -> "Reconocemos la validación"
+export function tituloSinFecha(titulo) {
+  return norm(titulo).replace(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s*[\r\n]+/, "").trim();
+}
+
+// Extrae la fecha (formato D/M/AAAA) del inicio del título y la devuelve en
+// formato ISO (AAAA-MM-DD) para guardarla en evaluation_date. Si no hay fecha, null.
+export function fechaDeTitulo(titulo) {
+  const m = norm(titulo).match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s*[\r\n]+/);
+  if (!m) return null;
+  let anio = m[3];
+  if (anio.length === 2) anio = "20" + anio;
+  const iso = `${anio}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  const dt = new Date(iso + "T00:00:00");
+  return Number.isNaN(dt.getTime()) ? null : iso;
+}
+
 // Hojas de tipo "REG1erTRIM", "REG2doTRIM", "REG3erTRIM" (el nombre puede variar
 // ligeramente entre colegios, por eso se busca con una expresión flexible).
 export function detectarHojasTrimestre(workbook) {
@@ -50,7 +68,11 @@ export function parsearPlanillaCompleta(sheet) {
     const cols = [];
     for (let c = inicio; c < finExclusivo; c++) {
       const titulo = norm(row9[c]);
-      if (titulo && titulo.toLowerCase() !== "promedio") cols.push({ col: c, titulo });
+      if (titulo && titulo.toLowerCase() !== "promedio") {
+        // La fecha va separada: se extrae del título y se guarda en evaluation_date.
+        const tituloLimpio = tituloSinFecha(titulo);
+        if (tituloLimpio) cols.push({ col: c, titulo: tituloLimpio, fecha: fechaDeTitulo(titulo) });
+      }
     }
     return cols;
   };

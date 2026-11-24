@@ -10,3 +10,6 @@ dist
 
 # Notas locales con comandos y contraseñas
 DOneDriveEscritorioSistemasapp A.txt
+
+# Local Netlify folder
+.netlify
